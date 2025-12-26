@@ -1,7 +1,7 @@
 mod api;
 mod data;
 
-use data::{StarMap, StarNode, SystemMarker, UserData};
+use data::{FlightPath, StarMap, StarNode, SystemMarker, UserData};
 use eframe::egui;
 use petgraph::graph::NodeIndex;
 use std::collections::{HashMap, HashSet};
@@ -148,6 +148,12 @@ impl StarMapApp {
             }
             if self.show_ships {
                 all_system_ids.extend(user_data.ship_system_ids.iter().cloned());
+                // Also add in-system flights as ship markers
+                for flight in &user_data.flight_paths {
+                    if flight.is_in_system {
+                        all_system_ids.insert(flight.origin_system_id.clone());
+                    }
+                }
             }
         }
         
@@ -164,8 +170,16 @@ impl StarMapApp {
                 if self.show_bases && user_data.base_system_ids.contains(&system_id) {
                     markers.push(SystemMarker::Base);
                 }
-                if self.show_ships && user_data.ship_system_ids.contains(&system_id) {
-                    markers.push(SystemMarker::Ship);
+                if self.show_ships {
+                    // Check for docked ships
+                    let has_docked_ship = user_data.ship_system_ids.contains(&system_id);
+                    // Check for in-system flights
+                    let has_in_system_flight = user_data.flight_paths.iter()
+                        .any(|f| f.is_in_system && f.origin_system_id == system_id);
+                    
+                    if has_docked_ship || has_in_system_flight {
+                        markers.push(SystemMarker::Ship);
+                    }
                 }
             }
             
@@ -249,6 +263,52 @@ impl StarMapApp {
                                 [pos_a, pos_b],
                                 egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(100, 100, 150, 80)),
                             );
+                        }
+                    }
+                }
+            }
+            
+            // Draw flight paths (blue lines with arrows for inter-system, rings handled with markers)
+            let flight_color = egui::Color32::from_rgb(80, 160, 255);
+            if self.show_ships {
+                if let Some(user_data) = &self.user_data {
+                    for flight in &user_data.flight_paths {
+                        if !flight.is_in_system {
+                            // Inter-system flight: draw line with arrow
+                            if let (Some(origin_idx), Some(dest_idx)) = (
+                                star_map.natural_id_to_node.get(&flight.origin_system_id),
+                                star_map.natural_id_to_node.get(&flight.destination_system_id),
+                            ) {
+                                let origin_node = &star_map.graph[*origin_idx];
+                                let dest_node = &star_map.graph[*dest_idx];
+                                let pos_origin = self.world_to_screen(origin_node, rect);
+                                let pos_dest = self.world_to_screen(dest_node, rect);
+                                
+                                // Only draw if at least one endpoint is visible
+                                if rect.contains(pos_origin) || rect.contains(pos_dest) {
+                                    // Draw the flight line (thicker than connections)
+                                    painter.line_segment(
+                                        [pos_origin, pos_dest],
+                                        egui::Stroke::new(2.0, flight_color),
+                                    );
+                                    
+                                    // Draw arrow at midpoint pointing towards destination
+                                    let mid = pos_origin + (pos_dest - pos_origin) * 0.6;
+                                    let dir = (pos_dest - pos_origin).normalized();
+                                    let arrow_size = 8.0;
+                                    let perp = egui::vec2(-dir.y, dir.x);
+                                    
+                                    let arrow_tip = mid + dir * arrow_size;
+                                    let arrow_left = mid - dir * arrow_size * 0.5 + perp * arrow_size * 0.5;
+                                    let arrow_right = mid - dir * arrow_size * 0.5 - perp * arrow_size * 0.5;
+                                    
+                                    painter.add(egui::Shape::convex_polygon(
+                                        vec![arrow_tip, arrow_left, arrow_right],
+                                        flight_color,
+                                        egui::Stroke::NONE,
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
@@ -668,6 +728,7 @@ impl AppWrapper {
                     username: username.clone(),
                     ship_system_ids: HashSet::new(),
                     base_system_ids: HashSet::new(),
+                    flight_paths: Vec::new(),
                 };
                 
                 // Fetch ships
@@ -692,6 +753,36 @@ impl AppWrapper {
                     }
                     Err(e) => {
                         tracing::warn!("Failed to fetch ships: {}", e);
+                    }
+                }
+                
+                // Fetch flights
+                match api::fetch_flights(&username, &auth_token).await {
+                    Ok(flights) => {
+                        tracing::info!("Fetched {} flights", flights.len());
+                        for flight in &flights {
+                            tracing::info!("Flight {}: origin={:?}, dest={:?}", 
+                                flight.flight_id, flight.origin, flight.destination);
+                            
+                            let origin_system = flight.origin.as_ref()
+                                .and_then(|o| o.system_natural_id.clone());
+                            let dest_system = flight.destination.as_ref()
+                                .and_then(|d| d.system_natural_id.clone());
+                            
+                            if let (Some(origin), Some(dest)) = (origin_system, dest_system) {
+                                let is_in_system = origin == dest;
+                                tracing::info!("  -> {} -> {} (in_system: {})", origin, dest, is_in_system);
+                                user_data.flight_paths.push(FlightPath {
+                                    origin_system_id: origin,
+                                    destination_system_id: dest,
+                                    ship_registration: flight.ship_id.clone(),
+                                    is_in_system,
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch flights: {}", e);
                     }
                 }
                 
@@ -743,6 +834,7 @@ impl AppWrapper {
                 username: username.clone(),
                 ship_system_ids: HashSet::new(),
                 base_system_ids: HashSet::new(),
+                flight_paths: Vec::new(),
             };
             
             // Fetch ships
@@ -767,6 +859,36 @@ impl AppWrapper {
                 }
                 Err(e) => {
                     tracing::warn!("Failed to fetch ships: {}", e);
+                }
+            }
+            
+            // Fetch flights
+            match api::fetch_flights(&username, &auth_token).await {
+                Ok(flights) => {
+                    tracing::info!("Fetched {} flights", flights.len());
+                    for flight in &flights {
+                        tracing::info!("Flight {}: origin={:?}, dest={:?}", 
+                            flight.flight_id, flight.origin, flight.destination);
+                        
+                        let origin_system = flight.origin.as_ref()
+                            .and_then(|o| o.system_natural_id.clone());
+                        let dest_system = flight.destination.as_ref()
+                            .and_then(|d| d.system_natural_id.clone());
+                        
+                        if let (Some(origin), Some(dest)) = (origin_system, dest_system) {
+                            let is_in_system = origin == dest;
+                            tracing::info!("  -> {} -> {} (in_system: {})", origin, dest, is_in_system);
+                            user_data.flight_paths.push(FlightPath {
+                                origin_system_id: origin,
+                                destination_system_id: dest,
+                                ship_registration: flight.ship_id.clone(),
+                                is_in_system,
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch flights: {}", e);
                 }
             }
             

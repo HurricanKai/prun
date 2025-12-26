@@ -144,6 +144,57 @@ pub struct AuthResponse {
     pub expiry: Option<String>,
 }
 
+// Flight segment data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlightSegment {
+    #[serde(rename = "Type")]
+    pub segment_type: String,
+    #[serde(rename = "Origin")]
+    pub origin: Option<FlightLocation>,
+    #[serde(rename = "Destination")]
+    pub destination: Option<FlightLocation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlightLocation {
+    #[serde(rename = "SystemId")]
+    pub system_id: Option<String>,
+    #[serde(rename = "SystemNaturalId")]
+    pub system_natural_id: Option<String>,
+    #[serde(rename = "SystemName")]
+    pub system_name: Option<String>,
+}
+
+// Flight data from /ship/flights/{username}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Flight {
+    #[serde(rename = "FlightId")]
+    pub flight_id: String,
+    #[serde(rename = "ShipId")]
+    pub ship_id: String,
+    #[serde(rename = "Origin")]
+    pub origin: Option<FlightLocation>,
+    #[serde(rename = "Destination")]
+    pub destination: Option<FlightLocation>,
+    #[serde(rename = "Segments")]
+    pub segments: Option<Vec<FlightSegment>>,
+    #[serde(rename = "DepartureTimeEpochMs")]
+    pub departure_time_epoch_ms: Option<i64>,
+    #[serde(rename = "ArrivalTimeEpochMs")]
+    pub arrival_time_epoch_ms: Option<i64>,
+    #[serde(rename = "CurrentSegmentIndex")]
+    pub current_segment_index: Option<i32>,
+}
+
+// Processed flight for visualization
+#[derive(Debug, Clone)]
+pub struct FlightPath {
+    pub origin_system_id: String,
+    pub destination_system_id: String,
+    pub ship_registration: String,
+    pub is_in_system: bool, // true if origin == destination (in-system flight)
+}
+
 // User data aggregated from various endpoints
 #[derive(Debug, Clone, Default)]
 pub struct UserData {
@@ -151,6 +202,7 @@ pub struct UserData {
     pub username: String,
     pub ship_system_ids: HashSet<String>,
     pub base_system_ids: HashSet<String>,
+    pub flight_paths: Vec<FlightPath>,
 }
 
 // System markers for visualization
@@ -236,6 +288,7 @@ pub struct StarMap {
     pub graph: UnGraph<StarNode, ()>,
     #[allow(dead_code)]
     id_to_index: HashMap<String, NodeIndex>,
+    pub natural_id_to_node: HashMap<String, NodeIndex>,
 }
 
 
@@ -244,12 +297,14 @@ impl StarMap {
     pub fn from_systems(systems: Vec<StarSystem>) -> Self {
         let mut graph = UnGraph::new_undirected();
         let mut id_to_index = HashMap::new();
+        let mut natural_id_to_node = HashMap::new();
 
         // First pass: add all nodes
         for sys in &systems {
             let node = StarNode::from(sys);
             let idx = graph.add_node(node);
             id_to_index.insert(sys.system_id.clone(), idx);
+            natural_id_to_node.insert(sys.natural_id.clone(), idx);
         }
 
         // Second pass: add edges
@@ -269,6 +324,7 @@ impl StarMap {
         StarMap {
             graph,
             id_to_index,
+            natural_id_to_node,
         }
     }
 
