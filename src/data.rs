@@ -141,7 +141,7 @@ pub struct AuthResponse {
     #[serde(rename = "AuthToken")]
     pub auth_token: String,
     #[serde(rename = "Expiry")]
-    pub expiry: Option<i64>,
+    pub expiry: Option<String>,
 }
 
 // User data aggregated from various endpoints
