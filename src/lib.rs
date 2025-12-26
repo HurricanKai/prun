@@ -673,9 +673,14 @@ impl AppWrapper {
                 // Fetch ships
                 match api::fetch_ships(&username, &auth_token).await {
                     Ok(ships) => {
-                        for ship in ships {
-                            if let Some(location) = ship.location {
-                                user_data.ship_system_ids.insert(location);
+                        tracing::info!("Fetched {} ships", ships.len());
+                        for ship in &ships {
+                            tracing::info!("Ship {} location: {:?}", ship.registration, ship.location);
+                            if let Some(location) = &ship.location {
+                                // Location might be a planet ID or system ID, extract system
+                                let system_id = extract_system_from_planet(location);
+                                tracing::info!("  -> system_id: {}", system_id);
+                                user_data.ship_system_ids.insert(system_id);
                             }
                         }
                     }
@@ -737,11 +742,14 @@ impl AppWrapper {
             // Fetch ships
             match api::fetch_ships(&username, &auth_token).await {
                 Ok(ships) => {
-                    for ship in ships {
-                        if let Some(location) = ship.location {
-                            // Location format varies - could be system ID or planet ID
-                            // We'll store it and try to match later
-                            user_data.ship_system_ids.insert(location);
+                    tracing::info!("Fetched {} ships", ships.len());
+                    for ship in &ships {
+                        tracing::info!("Ship {} location: {:?}", ship.registration, ship.location);
+                        if let Some(location) = &ship.location {
+                            // Location might be a planet ID or system ID, extract system
+                            let system_id = extract_system_from_planet(location);
+                            tracing::info!("  -> system_id: {}", system_id);
+                            user_data.ship_system_ids.insert(system_id);
                         }
                     }
                 }
@@ -753,11 +761,13 @@ impl AppWrapper {
             // Fetch sites (bases)
             match api::fetch_sites(&username, &auth_token).await {
                 Ok(sites) => {
-                    for site in sites {
-                        // Sites have planet_identifier which is the system natural ID
-                        if let Some(planet_id) = site.planet_identifier {
+                    tracing::info!("Fetched {} sites", sites.len());
+                    for site in &sites {
+                        tracing::info!("Site planet_identifier: {:?}", site.planet_identifier);
+                        if let Some(planet_id) = &site.planet_identifier {
                             // Extract system ID from planet identifier (e.g., "UV-351a" -> "UV-351")
-                            let system_id = extract_system_from_planet(&planet_id);
+                            let system_id = extract_system_from_planet(planet_id);
+                            tracing::info!("  -> system_id: {}", system_id);
                             user_data.base_system_ids.insert(system_id);
                         }
                     }
