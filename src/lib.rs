@@ -555,21 +555,37 @@ impl StarMapApp {
                         for base in bases_in_system {
                             ui.collapsing(format!("🏭 {}", base.planet_name), |ui| {
                                 if base.items.is_empty() {
-                                    ui.label("No consumption data");
+                                    ui.label("No burn data");
                                 } else {
                                     egui::Grid::new(format!("burn_grid_{}", base.planet_natural_id))
                                         .striped(true)
                                         .show(ui, |ui| {
-                                            ui.label("Material");
+                                            ui.label("Mat");
+                                            ui.label("Type");
                                             ui.label("Daily");
-                                            ui.label("Days Left");
+                                            ui.label("Inv");
+                                            ui.label("Days");
                                             ui.end_row();
                                             
                                             for item in &base.items {
                                                 ui.label(&item.material_ticker);
-                                                ui.label(format!("{:.1}", item.daily_consumption));
+                                                // Show abbreviated type
+                                                let type_abbrev = match item.burn_type.as_str() {
+                                                    "WORKFORCE_CONSUMPTION" => "WF",
+                                                    "PRODUCTION_CONSUMPTION" => "IN",
+                                                    "PRODUCTION_OUTPUT" => "OUT",
+                                                    _ => &item.burn_type,
+                                                };
+                                                ui.label(type_abbrev);
+                                                ui.label(format!("{:.1}", item.daily_amount));
                                                 
-                                                if let Some(days) = item.days_until_shortage {
+                                                if let Some(inv) = item.inventory {
+                                                    ui.label(format!("{:.0}", inv));
+                                                } else {
+                                                    ui.label("-");
+                                                }
+                                                
+                                                if let Some(days) = item.days_left {
                                                     let color = if days < 3.0 {
                                                         egui::Color32::RED
                                                     } else if days < 7.0 {
@@ -774,65 +790,53 @@ async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
         }
     }
     
-    // Fetch workforce data (burn rates)
-    if let Ok(workforces) = api::fetch_workforce(username, auth_token).await {
-        // Group workforce data by planet
-        let mut planet_burns: HashMap<String, BaseBurn> = HashMap::new();
-        
-        for workforce in workforces {
-            let planet_id = workforce.planet_natural_id.clone().unwrap_or_default();
-            let planet_name = workforce.planet_name.clone().unwrap_or_else(|| planet_id.clone());
+    // Fetch burn rate data
+    if let Ok(burn_response) = api::fetch_burnrate(username, auth_token).await {
+        if let Some(burn_items) = burn_response.burn_rate {
+            // Group burn data by planet
+            let mut planet_burns: HashMap<String, BaseBurn> = HashMap::new();
             
-            if planet_id.is_empty() {
-                continue;
+            for item in burn_items {
+                let planet_id = item.planet_natural_id.clone().unwrap_or_default();
+                let planet_name = item.planet_name.clone().unwrap_or_else(|| planet_id.clone());
+                
+                if planet_id.is_empty() {
+                    continue;
+                }
+                
+                let base_burn = planet_burns.entry(planet_id.clone()).or_insert_with(|| BaseBurn {
+                    planet_natural_id: planet_id,
+                    planet_name,
+                    items: Vec::new(),
+                });
+                
+                if let Some(ticker) = item.material_ticker {
+                    base_burn.items.push(BurnItem {
+                        material_ticker: ticker,
+                        burn_type: item.burn_type.unwrap_or_default(),
+                        daily_amount: item.daily_amount.unwrap_or(0.0),
+                        inventory: item.inventory,
+                        days_left: item.days_left,
+                    });
+                }
             }
             
-            let base_burn = planet_burns.entry(planet_id.clone()).or_insert_with(|| BaseBurn {
-                planet_natural_id: planet_id,
-                planet_name,
-                items: Vec::new(),
-            });
-            
-            // Add burn items from workforce needs
-            if let Some(needs) = workforce.needs {
-                for need in needs {
-                    if let (Some(ticker), Some(consumption)) = (need.material_ticker, need.units_per_interval) {
-                        // Check if we already have this material
-                        if let Some(existing) = base_burn.items.iter_mut().find(|i| i.material_ticker == ticker) {
-                            existing.daily_consumption += consumption;
-                            // Update days_until_shortage to the minimum
-                            if let Some(days) = need.days_until_shortage {
-                                existing.days_until_shortage = Some(
-                                    existing.days_until_shortage.map_or(days, |d| d.min(days))
-                                );
-                            }
-                        } else {
-                            base_burn.items.push(BurnItem {
-                                material_ticker: ticker,
-                                daily_consumption: consumption,
-                                days_until_shortage: need.days_until_shortage,
-                            });
-                        }
+            // Sort items by days_left (most urgent first), then by type
+            for burn in planet_burns.values_mut() {
+                burn.items.sort_by(|a, b| {
+                    match (a.days_left, b.days_left) {
+                        (Some(a_days), Some(b_days)) => a_days.partial_cmp(&b_days).unwrap_or(std::cmp::Ordering::Equal),
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (None, None) => a.material_ticker.cmp(&b.material_ticker),
                     }
-                }
+                });
             }
+            
+            user_data.base_burns = planet_burns.into_values().collect();
+            // Sort bases by planet name
+            user_data.base_burns.sort_by(|a, b| a.planet_name.cmp(&b.planet_name));
         }
-        
-        // Sort items by days_until_shortage (most urgent first)
-        for burn in planet_burns.values_mut() {
-            burn.items.sort_by(|a, b| {
-                match (a.days_until_shortage, b.days_until_shortage) {
-                    (Some(a_days), Some(b_days)) => a_days.partial_cmp(&b_days).unwrap_or(std::cmp::Ordering::Equal),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => a.material_ticker.cmp(&b.material_ticker),
-                }
-            });
-        }
-        
-        user_data.base_burns = planet_burns.into_values().collect();
-        // Sort bases by planet name
-        user_data.base_burns.sort_by(|a, b| a.planet_name.cmp(&b.planet_name));
     }
     
     user_data
