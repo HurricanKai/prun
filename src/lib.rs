@@ -675,8 +675,14 @@ impl AppWrapper {
                     Ok(ships) => {
                         tracing::info!("Fetched {} ships", ships.len());
                         for ship in &ships {
-                            tracing::info!("Ship {} location: {:?}", ship.registration, ship.location);
+                            tracing::info!("Ship {} location: {:?}, flight_id: {:?}", 
+                                ship.registration, ship.location, ship.flight_id);
                             if let Some(location) = &ship.location {
+                                // Skip empty locations (ships in flight)
+                                if location.is_empty() {
+                                    tracing::info!("  -> ship is in flight, skipping");
+                                    continue;
+                                }
                                 // Location might be a planet ID or system ID, extract system
                                 let system_id = extract_system_from_planet(location);
                                 tracing::info!("  -> system_id: {}", system_id);
@@ -744,8 +750,14 @@ impl AppWrapper {
                 Ok(ships) => {
                     tracing::info!("Fetched {} ships", ships.len());
                     for ship in &ships {
-                        tracing::info!("Ship {} location: {:?}", ship.registration, ship.location);
+                        tracing::info!("Ship {} location: {:?}, flight_id: {:?}", 
+                            ship.registration, ship.location, ship.flight_id);
                         if let Some(location) = &ship.location {
+                            // Skip empty locations (ships in flight)
+                            if location.is_empty() {
+                                tracing::info!("  -> ship is in flight, skipping");
+                                continue;
+                            }
                             // Location might be a planet ID or system ID, extract system
                             let system_id = extract_system_from_planet(location);
                             tracing::info!("  -> system_id: {}", system_id);
