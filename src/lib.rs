@@ -810,11 +810,17 @@ async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
             
             // Get efficiency for this production line (accounts for building condition + worker satisfaction)
             let efficiency = line.efficiency.unwrap_or(1.0);
+            let capacity = line.capacity.unwrap_or(0) as usize;
             
             // Process each order in this production line
+            // Skip the first `capacity` orders (those are active), only use queued orders
             if let Some(orders) = line.orders {
-                for order in orders {
-                    // Only count recurring orders (assume all are recurring per user request)
+                for order in orders.into_iter().skip(capacity) {
+                    // Only count recurring orders
+                    if !order.recurring.unwrap_or(false) {
+                        continue;
+                    }
+                    
                     // Skip halted orders
                     if order.is_halted.unwrap_or(false) {
                         continue;
