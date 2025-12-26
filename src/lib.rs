@@ -1,7 +1,7 @@
 mod api;
 mod data;
 
-use data::{BaseBurn, BurnItem, FlightPath, StarMap, StarNode, SystemMarker, UserData};
+use data::{BaseProduction, FlightPath, MaterialRate, StarMap, StarNode, SystemMarker, UserData};
 use eframe::egui;
 use petgraph::graph::NodeIndex;
 use std::collections::{HashMap, HashSet};
@@ -541,62 +541,59 @@ impl StarMapApp {
                     }
                 }
                 
-                // Show burn data for bases in this system
+                // Show production data for bases in this system
                 if let Some(user_data) = &self.user_data {
                     let system_id = &node.natural_id;
-                    let bases_in_system: Vec<_> = user_data.base_burns.iter()
+                    let bases_in_system: Vec<_> = user_data.base_production.iter()
                         .filter(|b| extract_system_from_planet(&b.planet_natural_id) == *system_id)
                         .collect();
                     
                     if !bases_in_system.is_empty() {
                         ui.separator();
-                        ui.heading("📊 Burn Rates");
+                        ui.heading("📊 Production Rates");
                         
                         for base in bases_in_system {
                             ui.collapsing(format!("🏭 {}", base.planet_name), |ui| {
-                                if base.items.is_empty() {
-                                    ui.label("No burn data");
+                                if base.rates.is_empty() {
+                                    ui.label("No production data");
                                 } else {
-                                    egui::Grid::new(format!("burn_grid_{}", base.planet_natural_id))
+                                    egui::Grid::new(format!("prod_grid_{}", base.planet_natural_id))
                                         .striped(true)
                                         .show(ui, |ui| {
-                                            ui.label("Mat");
-                                            ui.label("Type");
-                                            ui.label("Daily");
-                                            ui.label("Inv");
-                                            ui.label("Days");
+                                            ui.label("Material");
+                                            ui.label("In/day");
+                                            ui.label("Out/day");
+                                            ui.label("Net/day");
                                             ui.end_row();
                                             
-                                            for item in &base.items {
-                                                ui.label(&item.material_ticker);
-                                                // Show abbreviated type
-                                                let type_abbrev = match item.burn_type.as_str() {
-                                                    "WORKFORCE_CONSUMPTION" => "WF",
-                                                    "PRODUCTION_CONSUMPTION" => "IN",
-                                                    "PRODUCTION_OUTPUT" => "OUT",
-                                                    _ => &item.burn_type,
-                                                };
-                                                ui.label(type_abbrev);
-                                                ui.label(format!("{:.1}", item.daily_amount));
+                                            for rate in &base.rates {
+                                                ui.label(&rate.material_ticker);
                                                 
-                                                if let Some(inv) = item.inventory {
-                                                    ui.label(format!("{:.0}", inv));
+                                                // Input (consumption) in red
+                                                if rate.daily_input > 0.0 {
+                                                    ui.colored_label(egui::Color32::from_rgb(255, 100, 100), format!("-{:.1}", rate.daily_input));
                                                 } else {
                                                     ui.label("-");
                                                 }
                                                 
-                                                if let Some(days) = item.days_left {
-                                                    let color = if days < 3.0 {
-                                                        egui::Color32::RED
-                                                    } else if days < 7.0 {
-                                                        egui::Color32::YELLOW
-                                                    } else {
-                                                        egui::Color32::GREEN
-                                                    };
-                                                    ui.colored_label(color, format!("{:.1}", days));
+                                                // Output (production) in green
+                                                if rate.daily_output > 0.0 {
+                                                    ui.colored_label(egui::Color32::from_rgb(100, 255, 100), format!("+{:.1}", rate.daily_output));
                                                 } else {
-                                                    ui.label("∞");
+                                                    ui.label("-");
                                                 }
+                                                
+                                                // Net rate
+                                                let net = rate.daily_output - rate.daily_input;
+                                                let color = if net > 0.0 {
+                                                    egui::Color32::from_rgb(100, 255, 100)
+                                                } else if net < 0.0 {
+                                                    egui::Color32::from_rgb(255, 100, 100)
+                                                } else {
+                                                    egui::Color32::GRAY
+                                                };
+                                                let sign = if net > 0.0 { "+" } else { "" };
+                                                ui.colored_label(color, format!("{}{:.1}", sign, net));
                                                 ui.end_row();
                                             }
                                         });
@@ -743,14 +740,16 @@ enum AppMessage {
     UserDataLoaded(Result<UserData, String>),
 }
 
-/// Fetch all user data (ships, flights, bases, burn) from the API
+const MS_PER_DAY: f64 = 86_400_000.0;
+
+/// Fetch all user data (ships, flights, bases, production) from the API
 async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
     let mut user_data = UserData {
         username: username.to_string(),
         ship_system_ids: HashSet::new(),
         base_system_ids: HashSet::new(),
         flight_paths: Vec::new(),
-        base_burns: Vec::new(),
+        base_production: Vec::new(),
     };
     
     // Fetch ships (docked only - ships in flight have empty location)
@@ -790,53 +789,96 @@ async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
         }
     }
     
-    // Fetch burn rate data
-    if let Ok(burn_response) = api::fetch_burnrate(username, auth_token).await {
-        if let Some(burn_items) = burn_response.burn_rate {
-            // Group burn data by planet
-            let mut planet_burns: HashMap<String, BaseBurn> = HashMap::new();
+    // Fetch production data and calculate daily rates
+    if let Ok(production_lines) = api::fetch_production(username, auth_token).await {
+        // Group by planet and calculate rates
+        let mut planet_rates: HashMap<String, BaseProduction> = HashMap::new();
+        
+        for line in production_lines {
+            let planet_id = line.planet_natural_id.clone().unwrap_or_default();
+            let planet_name = line.planet_name.clone().unwrap_or_else(|| planet_id.clone());
             
-            for item in burn_items {
-                let planet_id = item.planet_natural_id.clone().unwrap_or_default();
-                let planet_name = item.planet_name.clone().unwrap_or_else(|| planet_id.clone());
-                
-                if planet_id.is_empty() {
-                    continue;
-                }
-                
-                let base_burn = planet_burns.entry(planet_id.clone()).or_insert_with(|| BaseBurn {
-                    planet_natural_id: planet_id,
-                    planet_name,
-                    items: Vec::new(),
-                });
-                
-                if let Some(ticker) = item.material_ticker {
-                    base_burn.items.push(BurnItem {
-                        material_ticker: ticker,
-                        burn_type: item.burn_type.unwrap_or_default(),
-                        daily_amount: item.daily_amount.unwrap_or(0.0),
-                        inventory: item.inventory,
-                        days_left: item.days_left,
-                    });
-                }
+            if planet_id.is_empty() {
+                continue;
             }
             
-            // Sort items by days_left (most urgent first), then by type
-            for burn in planet_burns.values_mut() {
-                burn.items.sort_by(|a, b| {
-                    match (a.days_left, b.days_left) {
-                        (Some(a_days), Some(b_days)) => a_days.partial_cmp(&b_days).unwrap_or(std::cmp::Ordering::Equal),
-                        (Some(_), None) => std::cmp::Ordering::Less,
-                        (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => a.material_ticker.cmp(&b.material_ticker),
+            let base_prod = planet_rates.entry(planet_id.clone()).or_insert_with(|| BaseProduction {
+                planet_natural_id: planet_id,
+                planet_name,
+                rates: Vec::new(),
+            });
+            
+            // Get efficiency for this production line (accounts for building condition + worker satisfaction)
+            let efficiency = line.efficiency.unwrap_or(1.0);
+            
+            // Process each order in this production line
+            if let Some(orders) = line.orders {
+                for order in orders {
+                    // Only count recurring orders (assume all are recurring per user request)
+                    // Skip halted orders
+                    if order.is_halted.unwrap_or(false) {
+                        continue;
                     }
-                });
+                    
+                    let duration_ms = order.duration_ms.unwrap_or(0) as f64;
+                    if duration_ms <= 0.0 {
+                        continue;
+                    }
+                    
+                    // Calculate cycles per day, adjusted by efficiency
+                    let cycles_per_day = (MS_PER_DAY / duration_ms) * efficiency;
+                    
+                    // Process inputs (consumption)
+                    if let Some(inputs) = order.inputs {
+                        for input in inputs {
+                            if let (Some(ticker), Some(amount)) = (input.material_ticker, input.material_amount) {
+                                let daily_amount = amount as f64 * cycles_per_day;
+                                
+                                // Find or create rate entry
+                                if let Some(rate) = base_prod.rates.iter_mut().find(|r| r.material_ticker == ticker) {
+                                    rate.daily_input += daily_amount;
+                                } else {
+                                    base_prod.rates.push(MaterialRate {
+                                        material_ticker: ticker,
+                                        daily_input: daily_amount,
+                                        daily_output: 0.0,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Process outputs (production)
+                    if let Some(outputs) = order.outputs {
+                        for output in outputs {
+                            if let (Some(ticker), Some(amount)) = (output.material_ticker, output.material_amount) {
+                                let daily_amount = amount as f64 * cycles_per_day;
+                                
+                                // Find or create rate entry
+                                if let Some(rate) = base_prod.rates.iter_mut().find(|r| r.material_ticker == ticker) {
+                                    rate.daily_output += daily_amount;
+                                } else {
+                                    base_prod.rates.push(MaterialRate {
+                                        material_ticker: ticker,
+                                        daily_input: 0.0,
+                                        daily_output: daily_amount,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            
-            user_data.base_burns = planet_burns.into_values().collect();
-            // Sort bases by planet name
-            user_data.base_burns.sort_by(|a, b| a.planet_name.cmp(&b.planet_name));
         }
+        
+        // Sort rates by ticker for consistent display
+        for prod in planet_rates.values_mut() {
+            prod.rates.sort_by(|a, b| a.material_ticker.cmp(&b.material_ticker));
+        }
+        
+        user_data.base_production = planet_rates.into_values().collect();
+        // Sort bases by planet name
+        user_data.base_production.sort_by(|a, b| a.planet_name.cmp(&b.planet_name));
     }
     
     user_data

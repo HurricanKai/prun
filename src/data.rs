@@ -144,56 +144,71 @@ pub struct AuthResponse {
     pub expiry: Option<String>,
 }
 
-// Burn rate item from /usersettings/burnrate API
+// Production line material (input or output)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BurnRateItem {
+pub struct ProductionMaterial {
+    #[serde(rename = "MaterialAmount")]
+    pub material_amount: Option<i32>,
     #[serde(rename = "MaterialId")]
     pub material_id: Option<String>,
     #[serde(rename = "MaterialName")]
     pub material_name: Option<String>,
     #[serde(rename = "MaterialTicker")]
     pub material_ticker: Option<String>,
+}
+
+// Production order
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductionOrder {
+    #[serde(rename = "DurationMs")]
+    pub duration_ms: Option<i64>,
+    #[serde(rename = "Inputs")]
+    pub inputs: Option<Vec<ProductionMaterial>>,
+    #[serde(rename = "Outputs")]
+    pub outputs: Option<Vec<ProductionMaterial>>,
+    #[serde(rename = "Recurring")]
+    pub recurring: Option<bool>,
+    #[serde(rename = "IsHalted")]
+    pub is_halted: Option<bool>,
+    #[serde(rename = "StandardRecipeName")]
+    pub standard_recipe_name: Option<String>,
+}
+
+// Production line from /production/{UserName}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductionLine {
     #[serde(rename = "PlanetId")]
     pub planet_id: Option<String>,
     #[serde(rename = "PlanetNaturalId")]
     pub planet_natural_id: Option<String>,
     #[serde(rename = "PlanetName")]
     pub planet_name: Option<String>,
+    #[serde(rename = "SiteId")]
+    pub site_id: Option<String>,
     #[serde(rename = "Type")]
-    pub burn_type: Option<String>, // "WORKFORCE_CONSUMPTION", "PRODUCTION_CONSUMPTION", "PRODUCTION_OUTPUT"
-    #[serde(rename = "DailyAmount")]
-    pub daily_amount: Option<f64>,
-    #[serde(rename = "Inventory")]
-    pub inventory: Option<f64>,
-    #[serde(rename = "DaysLeft")]
-    pub days_left: Option<f64>,
+    pub building_type: Option<String>,
+    #[serde(rename = "Capacity")]
+    pub capacity: Option<i32>,
+    #[serde(rename = "Efficiency")]
+    pub efficiency: Option<f64>,
+    #[serde(rename = "Orders")]
+    pub orders: Option<Vec<ProductionOrder>>,
 }
 
-// Burn rate response from /usersettings/burnrate API
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BurnRateResponse {
-    #[serde(rename = "BurnRate")]
-    pub burn_rate: Option<Vec<BurnRateItem>>,
-    #[serde(rename = "Exclusions")]
-    pub exclusions: Option<Vec<serde_json::Value>>,
-}
-
-// Burn data for a material on a planet (processed)
+// Calculated daily rate for a material
 #[derive(Debug, Clone)]
-pub struct BurnItem {
+pub struct MaterialRate {
     pub material_ticker: String,
-    pub burn_type: String,
-    pub daily_amount: f64,
-    pub inventory: Option<f64>,
-    pub days_left: Option<f64>,
+    pub daily_input: f64,  // consumption per day
+    pub daily_output: f64, // production per day
 }
 
-// Aggregated burn data for a base/planet
+// Aggregated production data for a base/planet
 #[derive(Debug, Clone)]
-pub struct BaseBurn {
+pub struct BaseProduction {
     pub planet_natural_id: String,
     pub planet_name: String,
-    pub items: Vec<BurnItem>,
+    pub rates: Vec<MaterialRate>,
 }
 
 // Flight line (part of origin/destination address)
@@ -305,7 +320,7 @@ pub struct UserData {
     pub ship_system_ids: HashSet<String>,
     pub base_system_ids: HashSet<String>,
     pub flight_paths: Vec<FlightPath>,
-    pub base_burns: Vec<BaseBurn>, // Burn data per base
+    pub base_production: Vec<BaseProduction>, // Production rates per base
 }
 
 // System markers for visualization
