@@ -8,6 +8,34 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
+const AUTH_TOKEN_KEY: &str = "fio_auth_token";
+const USERNAME_KEY: &str = "fio_username";
+
+fn get_local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
+fn save_auth(token: &str, username: &str) {
+    if let Some(storage) = get_local_storage() {
+        let _ = storage.set_item(AUTH_TOKEN_KEY, token);
+        let _ = storage.set_item(USERNAME_KEY, username);
+    }
+}
+
+fn load_auth() -> Option<(String, String)> {
+    let storage = get_local_storage()?;
+    let token = storage.get_item(AUTH_TOKEN_KEY).ok()??;
+    let username = storage.get_item(USERNAME_KEY).ok()??;
+    Some((token, username))
+}
+
+fn clear_auth() {
+    if let Some(storage) = get_local_storage() {
+        let _ = storage.remove_item(AUTH_TOKEN_KEY);
+        let _ = storage.remove_item(USERNAME_KEY);
+    }
+}
+
 pub struct StarMapApp {
     star_map: Option<Arc<StarMap>>,
     loading: bool,
@@ -501,6 +529,7 @@ impl StarMapApp {
                 self.user_data = None;
                 self.username.clear();
                 self.password.clear();
+                clear_auth();
                 self.update_system_markers();
             }
         } else {
@@ -626,6 +655,54 @@ impl AppWrapper {
             let _ = tx_cx.send(AppMessage::ExchangeStationsLoaded(result));
         });
         
+        // Try to restore auth from localStorage
+        if let Some((auth_token, username)) = load_auth() {
+            app.auth_token = Some(auth_token.clone());
+            app.username = username.clone();
+            app.loading_user_data = true;
+            
+            // Fetch user data with restored auth
+            let tx_user = tx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut user_data = UserData {
+                    username: username.clone(),
+                    ship_system_ids: HashSet::new(),
+                    base_system_ids: HashSet::new(),
+                };
+                
+                // Fetch ships
+                match api::fetch_ships(&username, &auth_token).await {
+                    Ok(ships) => {
+                        for ship in ships {
+                            if let Some(location) = ship.location {
+                                user_data.ship_system_ids.insert(location);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch ships: {}", e);
+                    }
+                }
+                
+                // Fetch sites (bases)
+                match api::fetch_sites(&username, &auth_token).await {
+                    Ok(sites) => {
+                        for site in sites {
+                            if let Some(planet_id) = site.planet_identifier {
+                                let system_id = extract_system_from_planet(&planet_id);
+                                user_data.base_system_ids.insert(system_id);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch sites: {}", e);
+                    }
+                }
+                
+                let _ = tx_user.send(AppMessage::UserDataLoaded(Ok(user_data)));
+            });
+        }
+        
         Self {
             app,
             message_receiver: rx,
@@ -745,6 +822,9 @@ impl eframe::App for AppWrapper {
                     self.app.logging_in = false;
                     match result {
                         Ok((auth_token, username)) => {
+                            // Save to localStorage
+                            save_auth(&auth_token, &username);
+                            
                             self.app.auth_token = Some(auth_token.clone());
                             self.app.username = username.clone();
                             self.app.password.clear();
