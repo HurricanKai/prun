@@ -170,6 +170,18 @@ pub struct FlightSegment {
     pub origin_lines: Option<Vec<FlightLine>>,
     #[serde(rename = "DestinationLines", default)]
     pub destination_lines: Option<Vec<FlightLine>>,
+    #[serde(rename = "DepartureTimeEpochMs", default)]
+    pub departure_time_epoch_ms: Option<i64>,
+    #[serde(rename = "ArrivalTimeEpochMs", default)]
+    pub arrival_time_epoch_ms: Option<i64>,
+    #[serde(rename = "StlDistance", default)]
+    pub stl_distance: Option<f64>,
+    #[serde(rename = "StlFuelConsumption", default)]
+    pub stl_fuel_consumption: Option<f64>,
+    #[serde(rename = "FtlDistance", default)]
+    pub ftl_distance: Option<f64>,
+    #[serde(rename = "FtlFuelConsumption", default)]
+    pub ftl_fuel_consumption: Option<f64>,
 }
 
 // Flight data from /ship/flights/{username}
@@ -191,6 +203,16 @@ pub struct Flight {
     pub arrival_time_epoch_ms: Option<i64>,
     #[serde(rename = "CurrentSegmentIndex", default)]
     pub current_segment_index: Option<i32>,
+    #[serde(rename = "StlDistance", default)]
+    pub stl_distance: Option<f64>,
+    #[serde(rename = "FtlDistance", default)]
+    pub ftl_distance: Option<f64>,
+    #[serde(rename = "IsAborted", default)]
+    pub is_aborted: Option<bool>,
+    #[serde(rename = "UserNameSubmitted", default)]
+    pub user_name_submitted: Option<String>,
+    #[serde(rename = "Timestamp", default)]
+    pub timestamp: Option<String>,
 }
 
 impl Flight {
