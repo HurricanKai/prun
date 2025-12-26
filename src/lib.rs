@@ -815,30 +815,32 @@ async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
             // Process each order in this production line
             // Skip the first `capacity` orders (those are active), only use queued orders
             if let Some(orders) = line.orders {
-                for order in orders.into_iter().skip(capacity) {
-                    // Only count recurring orders
-                    if !order.recurring.unwrap_or(false) {
-                        continue;
-                    }
-                    
-                    // Skip halted orders
-                    if order.is_halted.unwrap_or(false) {
-                        continue;
-                    }
-                    
-                    let duration_ms = order.duration_ms.unwrap_or(0) as f64;
-                    if duration_ms <= 0.0 {
-                        continue;
-                    }
-                    
-                    // Calculate cycles per day, adjusted by efficiency
-                    let cycles_per_day = (MS_PER_DAY / duration_ms) * efficiency;
-                    
+                // Get queued recurring orders only
+                let queued_orders: Vec<_> = orders.into_iter()
+                    .skip(capacity)
+                    .filter(|o| o.recurring.unwrap_or(false) && !o.is_halted.unwrap_or(false))
+                    .collect();
+                
+                // Calculate total queue duration
+                let total_queue_duration_ms: f64 = queued_orders.iter()
+                    .map(|o| o.duration_ms.unwrap_or(0) as f64)
+                    .sum();
+                
+                if total_queue_duration_ms <= 0.0 {
+                    continue;
+                }
+                
+                // For each queued order, calculate its contribution to daily rates
+                // The queue cycles through all orders, so each order's contribution is:
+                // (materials per order) / (total_queue_duration) * MS_PER_DAY * capacity * efficiency
+                let rate_multiplier = (MS_PER_DAY / total_queue_duration_ms) * (capacity as f64) * efficiency;
+                
+                for order in queued_orders {
                     // Process inputs (consumption)
                     if let Some(inputs) = order.inputs {
                         for input in inputs {
                             if let (Some(ticker), Some(amount)) = (input.material_ticker, input.material_amount) {
-                                let daily_amount = amount as f64 * cycles_per_day;
+                                let daily_amount = amount as f64 * rate_multiplier;
                                 
                                 // Find or create rate entry
                                 if let Some(rate) = base_prod.rates.iter_mut().find(|r| r.material_ticker == ticker) {
@@ -858,7 +860,7 @@ async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
                     if let Some(outputs) = order.outputs {
                         for output in outputs {
                             if let (Some(ticker), Some(amount)) = (output.material_ticker, output.material_amount) {
-                                let daily_amount = amount as f64 * cycles_per_day;
+                                let daily_amount = amount as f64 * rate_multiplier;
                                 
                                 // Find or create rate entry
                                 if let Some(rate) = base_prod.rates.iter_mut().find(|r| r.material_ticker == ticker) {
