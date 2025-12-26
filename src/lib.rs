@@ -764,10 +764,10 @@ impl AppWrapper {
                             tracing::info!("Flight {}: origin={:?}, dest={:?}", 
                                 flight.flight_id, flight.origin, flight.destination);
                             
-                            let origin_system = flight.origin.as_ref()
-                                .and_then(|o| o.system_natural_id.clone());
-                            let dest_system = flight.destination.as_ref()
-                                .and_then(|d| d.system_natural_id.clone());
+                            let origin_system = flight.origin_system_natural_id();
+                            let dest_system = flight.destination_system_natural_id();
+                            
+                            tracing::info!("  -> origin_system={:?}, dest_system={:?}", origin_system, dest_system);
                             
                             if let (Some(origin), Some(dest)) = (origin_system, dest_system) {
                                 let is_in_system = origin == dest;
@@ -870,10 +870,10 @@ impl AppWrapper {
                         tracing::info!("Flight {}: origin={:?}, dest={:?}", 
                             flight.flight_id, flight.origin, flight.destination);
                         
-                        let origin_system = flight.origin.as_ref()
-                            .and_then(|o| o.system_natural_id.clone());
-                        let dest_system = flight.destination.as_ref()
-                            .and_then(|d| d.system_natural_id.clone());
+                        let origin_system = flight.origin_system_natural_id();
+                        let dest_system = flight.destination_system_natural_id();
+                        
+                        tracing::info!("  -> origin_system={:?}, dest_system={:?}", origin_system, dest_system);
                         
                         if let (Some(origin), Some(dest)) = (origin_system, dest_system) {
                             let is_in_system = origin == dest;

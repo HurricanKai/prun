@@ -144,25 +144,32 @@ pub struct AuthResponse {
     pub expiry: Option<String>,
 }
 
+// Flight line (part of origin/destination address)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlightLine {
+    #[serde(rename = "Type")]
+    pub line_type: String,
+    #[serde(rename = "LineId")]
+    pub line_id: Option<String>,
+    #[serde(rename = "LineNaturalId")]
+    pub line_natural_id: Option<String>,
+    #[serde(rename = "LineName")]
+    pub line_name: Option<String>,
+}
+
 // Flight segment data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlightSegment {
     #[serde(rename = "Type")]
     pub segment_type: String,
     #[serde(rename = "Origin")]
-    pub origin: Option<FlightLocation>,
+    pub origin: Option<String>,
     #[serde(rename = "Destination")]
-    pub destination: Option<FlightLocation>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FlightLocation {
-    #[serde(rename = "SystemId")]
-    pub system_id: Option<String>,
-    #[serde(rename = "SystemNaturalId")]
-    pub system_natural_id: Option<String>,
-    #[serde(rename = "SystemName")]
-    pub system_name: Option<String>,
+    pub destination: Option<String>,
+    #[serde(rename = "OriginLines")]
+    pub origin_lines: Option<Vec<FlightLine>>,
+    #[serde(rename = "DestinationLines")]
+    pub destination_lines: Option<Vec<FlightLine>>,
 }
 
 // Flight data from /ship/flights/{username}
@@ -173,9 +180,9 @@ pub struct Flight {
     #[serde(rename = "ShipId")]
     pub ship_id: String,
     #[serde(rename = "Origin")]
-    pub origin: Option<FlightLocation>,
+    pub origin: Option<String>,
     #[serde(rename = "Destination")]
-    pub destination: Option<FlightLocation>,
+    pub destination: Option<String>,
     #[serde(rename = "Segments")]
     pub segments: Option<Vec<FlightSegment>>,
     #[serde(rename = "DepartureTimeEpochMs")]
@@ -184,6 +191,26 @@ pub struct Flight {
     pub arrival_time_epoch_ms: Option<i64>,
     #[serde(rename = "CurrentSegmentIndex")]
     pub current_segment_index: Option<i32>,
+}
+
+impl Flight {
+    /// Extract the origin system natural ID from the first segment's origin lines
+    pub fn origin_system_natural_id(&self) -> Option<String> {
+        self.segments.as_ref()?.first()?
+            .origin_lines.as_ref()?
+            .iter()
+            .find(|line| line.line_type == "system")
+            .and_then(|line| line.line_natural_id.clone())
+    }
+    
+    /// Extract the destination system natural ID from the last segment's destination lines
+    pub fn destination_system_natural_id(&self) -> Option<String> {
+        self.segments.as_ref()?.last()?
+            .destination_lines.as_ref()?
+            .iter()
+            .find(|line| line.line_type == "system")
+            .and_then(|line| line.line_natural_id.clone())
+    }
 }
 
 // Processed flight for visualization

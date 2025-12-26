@@ -103,5 +103,8 @@ pub async fn fetch_sites(username: &str, auth_token: &str) -> Result<Vec<Site>, 
 
 pub async fn fetch_flights(username: &str, auth_token: &str) -> Result<Vec<Flight>, String> {
     let url = format!("{}/ship/flights/{}", FIO_API_BASE, username);
-    fetch_json(&url, Some(auth_token)).await
+    // The API returns an object with numeric keys like {"0": {...}, "1": {...}}
+    // We need to parse it as a HashMap and extract the values
+    let flights_map: std::collections::HashMap<String, Flight> = fetch_json(&url, Some(auth_token)).await?;
+    Ok(flights_map.into_values().collect())
 }
