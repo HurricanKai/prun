@@ -1,6 +1,6 @@
 use petgraph::graph::{NodeIndex, UnGraph};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemConnection {
@@ -36,6 +36,139 @@ pub struct StarSystem {
     pub user_name_submitted: String,
     #[serde(rename = "Timestamp")]
     pub timestamp: String,
+}
+
+// Exchange station data from /exchange/station
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangeStation {
+    #[serde(rename = "StationId")]
+    pub station_id: String,
+    #[serde(rename = "NaturalId")]
+    pub natural_id: String,
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "SystemId")]
+    pub system_id: String,
+    #[serde(rename = "SystemNaturalId")]
+    pub system_natural_id: String,
+    #[serde(rename = "SystemName")]
+    pub system_name: String,
+    #[serde(rename = "ComexCode")]
+    pub comex_code: String,
+    #[serde(rename = "ComexName")]
+    pub comex_name: String,
+}
+
+// Ship data from /ship/ships/{username}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ship {
+    #[serde(rename = "ShipId")]
+    pub ship_id: String,
+    #[serde(rename = "StoreId")]
+    pub store_id: Option<String>,
+    #[serde(rename = "StlFuelStoreId")]
+    pub stl_fuel_store_id: Option<String>,
+    #[serde(rename = "FtlFuelStoreId")]
+    pub ftl_fuel_store_id: Option<String>,
+    #[serde(rename = "Registration")]
+    pub registration: String,
+    #[serde(rename = "Name")]
+    pub name: Option<String>,
+    #[serde(rename = "CommissioningTimeEpochMs")]
+    pub commissioning_time_epoch_ms: Option<i64>,
+    #[serde(rename = "BlueprintNaturalId")]
+    pub blueprint_natural_id: Option<String>,
+    #[serde(rename = "FlightId")]
+    pub flight_id: Option<String>,
+    #[serde(rename = "Acceleration")]
+    pub acceleration: Option<f64>,
+    #[serde(rename = "Thrust")]
+    pub thrust: Option<f64>,
+    #[serde(rename = "Mass")]
+    pub mass: Option<f64>,
+    #[serde(rename = "OperatingEmptyMass")]
+    pub operating_empty_mass: Option<f64>,
+    #[serde(rename = "ReactorPower")]
+    pub reactor_power: Option<f64>,
+    #[serde(rename = "EmitterPower")]
+    pub emitter_power: Option<f64>,
+    #[serde(rename = "Volume")]
+    pub volume: Option<f64>,
+    #[serde(rename = "Weight")]
+    pub weight: Option<f64>,
+    #[serde(rename = "StlFuelFlowRate")]
+    pub stl_fuel_flow_rate: Option<f64>,
+    #[serde(rename = "Condition")]
+    pub condition: Option<f64>,
+    #[serde(rename = "RepairMaterials")]
+    pub repair_materials: Option<Vec<serde_json::Value>>,
+    #[serde(rename = "LastRepairEpochMs")]
+    pub last_repair_epoch_ms: Option<i64>,
+    #[serde(rename = "Location")]
+    pub location: Option<String>,
+    #[serde(rename = "UserNameSubmitted")]
+    pub user_name_submitted: Option<String>,
+    #[serde(rename = "Timestamp")]
+    pub timestamp: Option<String>,
+}
+
+// Site data from /sites/{username}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Site {
+    #[serde(rename = "SiteId")]
+    pub site_id: String,
+    #[serde(rename = "PlanetId")]
+    pub planet_id: String,
+    #[serde(rename = "PlanetIdentifier")]
+    pub planet_identifier: Option<String>,
+    #[serde(rename = "PlanetName")]
+    pub planet_name: Option<String>,
+    #[serde(rename = "PlanetFoundedEpochMs")]
+    pub planet_founded_epoch_ms: Option<i64>,
+    #[serde(rename = "InvestedPermits")]
+    pub invested_permits: Option<i32>,
+    #[serde(rename = "MaximumPermits")]
+    pub maximum_permits: Option<i32>,
+    #[serde(rename = "UserNameSubmitted")]
+    pub user_name_submitted: Option<String>,
+    #[serde(rename = "Timestamp")]
+    pub timestamp: Option<String>,
+}
+
+// Auth response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthResponse {
+    #[serde(rename = "AuthToken")]
+    pub auth_token: String,
+    #[serde(rename = "Expiry")]
+    pub expiry: Option<i64>,
+}
+
+// User data aggregated from various endpoints
+#[derive(Debug, Clone, Default)]
+pub struct UserData {
+    #[allow(dead_code)]
+    pub username: String,
+    pub ship_system_ids: HashSet<String>,
+    pub base_system_ids: HashSet<String>,
+}
+
+// System markers for visualization
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemMarker {
+    CommodityExchange,
+    Base,
+    Ship,
+}
+
+impl SystemMarker {
+    pub fn color(&self) -> egui::Color32 {
+        match self {
+            SystemMarker::CommodityExchange => egui::Color32::from_rgb(255, 100, 100), // Red
+            SystemMarker::Base => egui::Color32::from_rgb(100, 255, 100), // Green
+            SystemMarker::Ship => egui::Color32::from_rgb(100, 150, 255), // Blue
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

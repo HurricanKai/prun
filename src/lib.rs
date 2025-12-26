@@ -1,9 +1,10 @@
 mod api;
 mod data;
 
-use data::{StarMap, StarNode};
+use data::{StarMap, StarNode, SystemMarker, UserData};
 use eframe::egui;
 use petgraph::graph::NodeIndex;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
@@ -17,6 +18,29 @@ pub struct StarMapApp {
     search_query: String,
     show_connections: bool,
     show_labels: bool,
+    
+    // Authentication
+    auth_token: Option<String>,
+    username: String,
+    password: String,
+    login_error: Option<String>,
+    logging_in: bool,
+    
+    // User data
+    user_data: Option<UserData>,
+    loading_user_data: bool,
+    
+    // Exchange stations (public data)
+    cx_system_ids: HashSet<String>,
+    cx_names: HashMap<String, String>, // system_id -> CX name
+    
+    // System markers (computed from CX + user data)
+    system_markers: HashMap<String, SystemMarker>,
+    
+    // Show markers toggle
+    show_cx: bool,
+    show_bases: bool,
+    show_ships: bool,
 }
 
 struct MapView {
@@ -54,6 +78,23 @@ impl Default for StarMapApp {
             search_query: String::new(),
             show_connections: true,
             show_labels: false,
+            
+            auth_token: None,
+            username: String::new(),
+            password: String::new(),
+            login_error: None,
+            logging_in: false,
+            
+            user_data: None,
+            loading_user_data: false,
+            
+            cx_system_ids: HashSet::new(),
+            cx_names: HashMap::new(),
+            system_markers: HashMap::new(),
+            
+            show_cx: true,
+            show_bases: true,
+            show_ships: true,
         }
     }
 }
@@ -61,6 +102,44 @@ impl Default for StarMapApp {
 impl StarMapApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self::default()
+    }
+
+    fn update_system_markers(&mut self) {
+        self.system_markers.clear();
+        
+        // Add CX markers (highest priority)
+        if self.show_cx {
+            for system_id in &self.cx_system_ids {
+                self.system_markers.insert(system_id.clone(), SystemMarker::CommodityExchange);
+            }
+        }
+        
+        // Add user data markers (lower priority, won't overwrite CX)
+        if let Some(user_data) = &self.user_data {
+            if self.show_bases {
+                for system_id in &user_data.base_system_ids {
+                    self.system_markers.entry(system_id.clone())
+                        .or_insert(SystemMarker::Base);
+                }
+            }
+            if self.show_ships {
+                for system_id in &user_data.ship_system_ids {
+                    self.system_markers.entry(system_id.clone())
+                        .or_insert(SystemMarker::Ship);
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn get_system_id_for_node(&self, node: &StarNode) -> Option<String> {
+        // The star map uses natural_id, but we need to find the system_id
+        // For now, we'll use the natural_id as a key since that's what we have
+        if self.star_map.is_some() {
+            Some(node.natural_id.clone())
+        } else {
+            None
+        }
     }
 
     fn world_to_screen(&self, node: &StarNode, rect: egui::Rect) -> egui::Pos2 {
@@ -153,7 +232,7 @@ impl StarMapApp {
                     base_radius
                 };
 
-                let color = node.star_type.color();
+                let star_color = node.star_type.color();
 
                 // Check for hover
                 if let Some(hover_pos) = response.hover_pos() {
@@ -167,18 +246,43 @@ impl StarMapApp {
                     painter.circle_filled(
                         pos,
                         radius * 2.0,
-                        egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 30),
+                        egui::Color32::from_rgba_unmultiplied(star_color.r(), star_color.g(), star_color.b(), 30),
                     );
                 }
 
-                painter.circle_filled(pos, radius, color);
+                // Check for system marker
+                let marker = self.system_markers.get(&node.natural_id);
+                
+                // Draw marker ring if present
+                if let Some(marker) = marker {
+                    let marker_color = marker.color();
+                    // Draw outer ring
+                    painter.circle_stroke(
+                        pos,
+                        radius + 3.0,
+                        egui::Stroke::new(2.5, marker_color),
+                    );
+                    // Draw inner glow
+                    painter.circle_filled(
+                        pos,
+                        radius + 1.0,
+                        egui::Color32::from_rgba_unmultiplied(marker_color.r(), marker_color.g(), marker_color.b(), 60),
+                    );
+                }
+
+                painter.circle_filled(pos, radius, star_color);
 
                 // Draw label
-                if self.show_labels || is_hovered || is_selected {
+                if self.show_labels || is_hovered || is_selected || marker.is_some() {
+                    let label_text = if let Some(cx_name) = self.cx_names.get(&node.natural_id) {
+                        format!("{} ({})", node.name, cx_name)
+                    } else {
+                        node.name.clone()
+                    };
                     painter.text(
-                        pos + egui::vec2(radius + 3.0, 0.0),
+                        pos + egui::vec2(radius + 5.0, 0.0),
                         egui::Align2::LEFT_CENTER,
-                        &node.name,
+                        &label_text,
                         egui::FontId::proportional(10.0),
                         egui::Color32::WHITE,
                     );
@@ -207,6 +311,7 @@ impl StarMapApp {
         } else if let Some(star_map) = &self.star_map {
             ui.label(format!("Stars: {}", star_map.node_count()));
             ui.label(format!("Connections: {}", star_map.edge_count()));
+            ui.label(format!("CX Stations: {}", self.cx_system_ids.len()));
         }
 
         ui.separator();
@@ -224,6 +329,19 @@ impl StarMapApp {
         // View options
         ui.checkbox(&mut self.show_connections, "Show connections");
         ui.checkbox(&mut self.show_labels, "Show all labels");
+
+        ui.separator();
+        
+        // Marker visibility
+        ui.label("Show markers:");
+        let mut markers_changed = false;
+        markers_changed |= ui.checkbox(&mut self.show_cx, "🔴 Commodity Exchanges").changed();
+        markers_changed |= ui.checkbox(&mut self.show_bases, "🟢 Bases").changed();
+        markers_changed |= ui.checkbox(&mut self.show_ships, "🔵 Ships").changed();
+        
+        if markers_changed {
+            self.update_system_markers();
+        }
 
         ui.separator();
 
@@ -291,6 +409,22 @@ impl StarMapApp {
                 ui.label(format!("Position: ({:.1}, {:.1}, {:.1})", 
                     node.position[0], node.position[1], node.position[2]));
                 ui.label(format!("Sector: {}", node.sector_id));
+                
+                // Show marker info
+                if let Some(marker) = self.system_markers.get(&node.natural_id) {
+                    let marker_text = match marker {
+                        SystemMarker::CommodityExchange => {
+                            if let Some(cx_name) = self.cx_names.get(&node.natural_id) {
+                                format!("🔴 CX: {}", cx_name)
+                            } else {
+                                "🔴 Commodity Exchange".to_string()
+                            }
+                        }
+                        SystemMarker::Base => "🟢 Your Base".to_string(),
+                        SystemMarker::Ship => "🔵 Your Ship".to_string(),
+                    };
+                    ui.colored_label(marker.color(), marker_text);
+                }
 
                 // Show connections
                 let neighbors: Vec<_> = star_map.graph.neighbors(selected_idx).collect();
@@ -308,6 +442,56 @@ impl StarMapApp {
             }
         }
     }
+    
+    fn draw_auth_panel(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.heading("FIO Login");
+        
+        if self.auth_token.is_some() {
+            ui.label(format!("✅ Logged in as: {}", self.username));
+            
+            if self.loading_user_data {
+                ui.spinner();
+                ui.label("Loading user data...");
+            } else if let Some(user_data) = &self.user_data {
+                ui.label(format!("Ships: {} systems", user_data.ship_system_ids.len()));
+                ui.label(format!("Bases: {} systems", user_data.base_system_ids.len()));
+            }
+            
+            if ui.button("Logout").clicked() {
+                self.auth_token = None;
+                self.user_data = None;
+                self.username.clear();
+                self.password.clear();
+                self.update_system_markers();
+            }
+        } else {
+            ui.label("Username:");
+            ui.text_edit_singleline(&mut self.username);
+            
+            ui.label("Password:");
+            let password_edit = egui::TextEdit::singleline(&mut self.password)
+                .password(true);
+            ui.add(password_edit);
+            
+            if let Some(error) = &self.login_error {
+                ui.colored_label(egui::Color32::RED, error);
+            }
+            
+            let can_login = !self.username.is_empty() && !self.password.is_empty() && !self.logging_in;
+            
+            ui.add_enabled_ui(can_login, |ui| {
+                if ui.button("Login").clicked() {
+                    self.logging_in = true;
+                    self.login_error = None;
+                }
+            });
+            
+            if self.logging_in {
+                ui.spinner();
+            }
+        }
+    }
 }
 
 impl eframe::App for StarMapApp {
@@ -318,6 +502,7 @@ impl eframe::App for StarMapApp {
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     self.draw_sidebar(ui);
+                    self.draw_auth_panel(ui);
                 });
             });
 
@@ -327,7 +512,7 @@ impl eframe::App for StarMapApp {
         });
 
         // Request repaint for smooth interaction
-        if self.hovered_star.is_some() || self.loading {
+        if self.hovered_star.is_some() || self.loading || self.logging_in || self.loading_user_data {
             ctx.request_repaint();
         }
     }
@@ -368,10 +553,19 @@ pub async fn start() -> Result<(), JsValue> {
     Ok(())
 }
 
+// Message types for async operations
+enum AppMessage {
+    StarSystemsLoaded(Result<Vec<data::StarSystem>, String>),
+    ExchangeStationsLoaded(Result<Vec<data::ExchangeStation>, String>),
+    LoginResult(Result<(String, String), String>), // (auth_token, username)
+    UserDataLoaded(Result<UserData, String>),
+}
+
 // Wrapper to handle async data loading
 struct AppWrapper {
     app: StarMapApp,
-    data_receiver: Option<std::sync::mpsc::Receiver<Result<Vec<data::StarSystem>, String>>>,
+    message_receiver: std::sync::mpsc::Receiver<AppMessage>,
+    message_sender: std::sync::mpsc::Sender<AppMessage>,
 }
 
 impl AppWrapper {
@@ -380,33 +574,177 @@ impl AppWrapper {
         
         let (tx, rx) = std::sync::mpsc::channel();
         
+        // Fetch star systems
+        let tx_stars = tx.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let result = api::fetch_star_systems().await;
-            let _ = tx.send(result);
+            let _ = tx_stars.send(AppMessage::StarSystemsLoaded(result));
+        });
+        
+        // Fetch exchange stations (public endpoint)
+        let tx_cx = tx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = api::fetch_exchange_stations().await;
+            let _ = tx_cx.send(AppMessage::ExchangeStationsLoaded(result));
         });
         
         Self {
             app,
-            data_receiver: Some(rx),
+            message_receiver: rx,
+            message_sender: tx,
         }
     }
+    
+    fn handle_login(&self, username: String, password: String) {
+        let tx = self.message_sender.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = api::login(&username, &password).await;
+            match result {
+                Ok(auth_response) => {
+                    let _ = tx.send(AppMessage::LoginResult(Ok((auth_response.auth_token, username))));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::LoginResult(Err(e)));
+                }
+            }
+        });
+    }
+    
+    fn fetch_user_data(&self, username: String, auth_token: String) {
+        let tx = self.message_sender.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut user_data = UserData {
+                username: username.clone(),
+                ship_system_ids: HashSet::new(),
+                base_system_ids: HashSet::new(),
+            };
+            
+            // Fetch ships
+            match api::fetch_ships(&username, &auth_token).await {
+                Ok(ships) => {
+                    for ship in ships {
+                        if let Some(location) = ship.location {
+                            // Location format varies - could be system ID or planet ID
+                            // We'll store it and try to match later
+                            user_data.ship_system_ids.insert(location);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch ships: {}", e);
+                }
+            }
+            
+            // Fetch sites (bases)
+            match api::fetch_sites(&username, &auth_token).await {
+                Ok(sites) => {
+                    for site in sites {
+                        // Sites have planet_identifier which is the system natural ID
+                        if let Some(planet_id) = site.planet_identifier {
+                            // Extract system ID from planet identifier (e.g., "UV-351a" -> "UV-351")
+                            let system_id = extract_system_from_planet(&planet_id);
+                            user_data.base_system_ids.insert(system_id);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch sites: {}", e);
+                }
+            }
+            
+            let _ = tx.send(AppMessage::UserDataLoaded(Ok(user_data)));
+        });
+    }
+}
+
+// Extract system ID from planet identifier (e.g., "UV-351a" -> "UV-351")
+fn extract_system_from_planet(planet_id: &str) -> String {
+    // Planet IDs typically end with a lowercase letter (a, b, c, etc.)
+    // System IDs are the part before that
+    let chars: Vec<char> = planet_id.chars().collect();
+    if let Some(last) = chars.last() {
+        if last.is_ascii_lowercase() {
+            return chars[..chars.len()-1].iter().collect();
+        }
+    }
+    planet_id.to_string()
 }
 
 impl eframe::App for AppWrapper {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        if let Some(rx) = &self.data_receiver {
-            if let Ok(result) = rx.try_recv() {
-                match result {
-                    Ok(systems) => {
-                        self.app.star_map = Some(Arc::new(StarMap::from_systems(systems)));
-                        self.app.loading = false;
-                    }
-                    Err(e) => {
-                        self.app.error = Some(e);
-                        self.app.loading = false;
+        // Process all pending messages
+        while let Ok(msg) = self.message_receiver.try_recv() {
+            match msg {
+                AppMessage::StarSystemsLoaded(result) => {
+                    match result {
+                        Ok(systems) => {
+                            self.app.star_map = Some(Arc::new(StarMap::from_systems(systems)));
+                            self.app.loading = false;
+                            self.app.update_system_markers();
+                        }
+                        Err(e) => {
+                            self.app.error = Some(e);
+                            self.app.loading = false;
+                        }
                     }
                 }
-                self.data_receiver = None;
+                AppMessage::ExchangeStationsLoaded(result) => {
+                    match result {
+                        Ok(stations) => {
+                            for station in stations {
+                                // Use SystemNaturalId to match with star map
+                                self.app.cx_system_ids.insert(station.system_natural_id.clone());
+                                self.app.cx_names.insert(station.system_natural_id, station.comex_code);
+                            }
+                            self.app.update_system_markers();
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to load exchange stations: {}", e);
+                        }
+                    }
+                }
+                AppMessage::LoginResult(result) => {
+                    self.app.logging_in = false;
+                    match result {
+                        Ok((auth_token, username)) => {
+                            self.app.auth_token = Some(auth_token.clone());
+                            self.app.username = username.clone();
+                            self.app.password.clear();
+                            self.app.login_error = None;
+                            self.app.loading_user_data = true;
+                            
+                            // Fetch user data
+                            self.fetch_user_data(username, auth_token);
+                        }
+                        Err(e) => {
+                            self.app.login_error = Some(e);
+                        }
+                    }
+                }
+                AppMessage::UserDataLoaded(result) => {
+                    self.app.loading_user_data = false;
+                    match result {
+                        Ok(user_data) => {
+                            self.app.user_data = Some(user_data);
+                            self.app.update_system_markers();
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to load user data: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Handle login button click
+        if self.app.logging_in && self.app.auth_token.is_none() {
+            let username = self.app.username.clone();
+            let password = self.app.password.clone();
+            if !username.is_empty() && !password.is_empty() {
+                self.handle_login(username, password);
+                // Prevent re-triggering
+                self.app.logging_in = false;
+                self.app.logging_in = true; // Keep spinner showing
             }
         }
         
