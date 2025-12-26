@@ -34,8 +34,8 @@ pub struct StarMapApp {
     cx_system_ids: HashSet<String>,
     cx_names: HashMap<String, String>, // system_id -> CX name
     
-    // System markers (computed from CX + user data)
-    system_markers: HashMap<String, SystemMarker>,
+    // System markers (computed from CX + user data) - now stores all markers per system
+    system_markers: HashMap<String, Vec<SystemMarker>>,
     
     // Show markers toggle
     show_cx: bool,
@@ -107,26 +107,42 @@ impl StarMapApp {
     fn update_system_markers(&mut self) {
         self.system_markers.clear();
         
-        // Add CX markers (highest priority)
+        // Collect all system IDs that have any marker
+        let mut all_system_ids: HashSet<String> = HashSet::new();
+        
         if self.show_cx {
-            for system_id in &self.cx_system_ids {
-                self.system_markers.insert(system_id.clone(), SystemMarker::CommodityExchange);
+            all_system_ids.extend(self.cx_system_ids.iter().cloned());
+        }
+        
+        if let Some(user_data) = &self.user_data {
+            if self.show_bases {
+                all_system_ids.extend(user_data.base_system_ids.iter().cloned());
+            }
+            if self.show_ships {
+                all_system_ids.extend(user_data.ship_system_ids.iter().cloned());
             }
         }
         
-        // Add user data markers (lower priority, won't overwrite CX)
-        if let Some(user_data) = &self.user_data {
-            if self.show_bases {
-                for system_id in &user_data.base_system_ids {
-                    self.system_markers.entry(system_id.clone())
-                        .or_insert(SystemMarker::Base);
+        // For each system, collect all applicable markers in priority order (outer to inner)
+        // CX (red) -> Base (green) -> Ship (blue)
+        for system_id in all_system_ids {
+            let mut markers = Vec::new();
+            
+            if self.show_cx && self.cx_system_ids.contains(&system_id) {
+                markers.push(SystemMarker::CommodityExchange);
+            }
+            
+            if let Some(user_data) = &self.user_data {
+                if self.show_bases && user_data.base_system_ids.contains(&system_id) {
+                    markers.push(SystemMarker::Base);
+                }
+                if self.show_ships && user_data.ship_system_ids.contains(&system_id) {
+                    markers.push(SystemMarker::Ship);
                 }
             }
-            if self.show_ships {
-                for system_id in &user_data.ship_system_ids {
-                    self.system_markers.entry(system_id.clone())
-                        .or_insert(SystemMarker::Ship);
-                }
+            
+            if !markers.is_empty() {
+                self.system_markers.insert(system_id, markers);
             }
         }
     }
@@ -250,37 +266,57 @@ impl StarMapApp {
                     );
                 }
 
-                // Check for system marker
-                let marker = self.system_markers.get(&node.natural_id);
+                // Check for system markers (can be multiple stacked rings)
+                let markers = self.system_markers.get(&node.natural_id);
                 
-                // Draw marker ring if present
-                if let Some(marker) = marker {
-                    let marker_color = marker.color();
-                    // Draw outer ring
-                    painter.circle_stroke(
-                        pos,
-                        radius + 3.0,
-                        egui::Stroke::new(2.5, marker_color),
-                    );
-                    // Draw inner glow
-                    painter.circle_filled(
-                        pos,
-                        radius + 1.0,
-                        egui::Color32::from_rgba_unmultiplied(marker_color.r(), marker_color.g(), marker_color.b(), 60),
-                    );
+                // Draw stacked marker rings if present (outer to inner: CX -> Base -> Ship)
+                if let Some(markers) = markers {
+                    let ring_width = 2.5;
+                    let ring_gap = 1.0;
+                    
+                    // Draw rings from outside in
+                    for (i, marker) in markers.iter().enumerate() {
+                        let marker_color = marker.color();
+                        let ring_radius = radius + 3.0 + (markers.len() - 1 - i) as f32 * (ring_width + ring_gap);
+                        
+                        painter.circle_stroke(
+                            pos,
+                            ring_radius,
+                            egui::Stroke::new(ring_width, marker_color),
+                        );
+                    }
+                    
+                    // Draw inner glow using the innermost marker's color
+                    if let Some(innermost) = markers.last() {
+                        let glow_color = innermost.color();
+                        painter.circle_filled(
+                            pos,
+                            radius + 1.0,
+                            egui::Color32::from_rgba_unmultiplied(glow_color.r(), glow_color.g(), glow_color.b(), 40),
+                        );
+                    }
                 }
 
                 painter.circle_filled(pos, radius, star_color);
 
                 // Draw label
-                if self.show_labels || is_hovered || is_selected || marker.is_some() {
+                let has_markers = markers.is_some();
+                if self.show_labels || is_hovered || is_selected || has_markers {
                     let label_text = if let Some(cx_name) = self.cx_names.get(&node.natural_id) {
                         format!("{} ({})", node.name, cx_name)
                     } else {
                         node.name.clone()
                     };
+                    
+                    // Offset label based on number of rings
+                    let label_offset = if let Some(m) = markers {
+                        radius + 5.0 + m.len() as f32 * 3.5
+                    } else {
+                        radius + 5.0
+                    };
+                    
                     painter.text(
-                        pos + egui::vec2(radius + 5.0, 0.0),
+                        pos + egui::vec2(label_offset, 0.0),
                         egui::Align2::LEFT_CENTER,
                         &label_text,
                         egui::FontId::proportional(10.0),
@@ -410,20 +446,22 @@ impl StarMapApp {
                     node.position[0], node.position[1], node.position[2]));
                 ui.label(format!("Sector: {}", node.sector_id));
                 
-                // Show marker info
-                if let Some(marker) = self.system_markers.get(&node.natural_id) {
-                    let marker_text = match marker {
-                        SystemMarker::CommodityExchange => {
-                            if let Some(cx_name) = self.cx_names.get(&node.natural_id) {
-                                format!("🔴 CX: {}", cx_name)
-                            } else {
-                                "🔴 Commodity Exchange".to_string()
+                // Show marker info (all markers for this system)
+                if let Some(markers) = self.system_markers.get(&node.natural_id) {
+                    for marker in markers {
+                        let marker_text = match marker {
+                            SystemMarker::CommodityExchange => {
+                                if let Some(cx_name) = self.cx_names.get(&node.natural_id) {
+                                    format!("🔴 CX: {}", cx_name)
+                                } else {
+                                    "🔴 Commodity Exchange".to_string()
+                                }
                             }
-                        }
-                        SystemMarker::Base => "🟢 Your Base".to_string(),
-                        SystemMarker::Ship => "🔵 Your Ship".to_string(),
-                    };
-                    ui.colored_label(marker.color(), marker_text);
+                            SystemMarker::Base => "🟢 Your Base".to_string(),
+                            SystemMarker::Ship => "🔵 Your Ship".to_string(),
+                        };
+                        ui.colored_label(marker.color(), marker_text);
+                    }
                 }
 
                 // Show connections
