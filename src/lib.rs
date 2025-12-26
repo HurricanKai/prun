@@ -1,7 +1,7 @@
 mod api;
 mod data;
 
-use data::{FlightPath, StarMap, StarNode, SystemMarker, UserData};
+use data::{BaseBurn, BurnItem, FlightPath, StarMap, StarNode, SystemMarker, UserData};
 use eframe::egui;
 use petgraph::graph::NodeIndex;
 use std::collections::{HashMap, HashSet};
@@ -540,8 +540,58 @@ impl StarMapApp {
                         ui.colored_label(marker.color(), marker_text);
                     }
                 }
+                
+                // Show burn data for bases in this system
+                if let Some(user_data) = &self.user_data {
+                    let system_id = &node.natural_id;
+                    let bases_in_system: Vec<_> = user_data.base_burns.iter()
+                        .filter(|b| extract_system_from_planet(&b.planet_natural_id) == *system_id)
+                        .collect();
+                    
+                    if !bases_in_system.is_empty() {
+                        ui.separator();
+                        ui.heading("📊 Burn Rates");
+                        
+                        for base in bases_in_system {
+                            ui.collapsing(format!("🏭 {}", base.planet_name), |ui| {
+                                if base.items.is_empty() {
+                                    ui.label("No consumption data");
+                                } else {
+                                    egui::Grid::new(format!("burn_grid_{}", base.planet_natural_id))
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            ui.label("Material");
+                                            ui.label("Daily");
+                                            ui.label("Days Left");
+                                            ui.end_row();
+                                            
+                                            for item in &base.items {
+                                                ui.label(&item.material_ticker);
+                                                ui.label(format!("{:.1}", item.daily_consumption));
+                                                
+                                                if let Some(days) = item.days_until_shortage {
+                                                    let color = if days < 3.0 {
+                                                        egui::Color32::RED
+                                                    } else if days < 7.0 {
+                                                        egui::Color32::YELLOW
+                                                    } else {
+                                                        egui::Color32::GREEN
+                                                    };
+                                                    ui.colored_label(color, format!("{:.1}", days));
+                                                } else {
+                                                    ui.label("∞");
+                                                }
+                                                ui.end_row();
+                                            }
+                                        });
+                                }
+                            });
+                        }
+                    }
+                }
 
                 // Show connections
+                ui.separator();
                 let neighbors: Vec<_> = star_map.graph.neighbors(selected_idx).collect();
                 if !neighbors.is_empty() {
                     ui.label(format!("Connections: {}", neighbors.len()));
@@ -677,13 +727,14 @@ enum AppMessage {
     UserDataLoaded(Result<UserData, String>),
 }
 
-/// Fetch all user data (ships, flights, bases) from the API
+/// Fetch all user data (ships, flights, bases, burn) from the API
 async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
     let mut user_data = UserData {
         username: username.to_string(),
         ship_system_ids: HashSet::new(),
         base_system_ids: HashSet::new(),
         flight_paths: Vec::new(),
+        base_burns: Vec::new(),
     };
     
     // Fetch ships (docked only - ships in flight have empty location)
@@ -721,6 +772,67 @@ async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
                 user_data.base_system_ids.insert(extract_system_from_planet(&planet_id));
             }
         }
+    }
+    
+    // Fetch workforce data (burn rates)
+    if let Ok(workforces) = api::fetch_workforce(username, auth_token).await {
+        // Group workforce data by planet
+        let mut planet_burns: HashMap<String, BaseBurn> = HashMap::new();
+        
+        for workforce in workforces {
+            let planet_id = workforce.planet_natural_id.clone().unwrap_or_default();
+            let planet_name = workforce.planet_name.clone().unwrap_or_else(|| planet_id.clone());
+            
+            if planet_id.is_empty() {
+                continue;
+            }
+            
+            let base_burn = planet_burns.entry(planet_id.clone()).or_insert_with(|| BaseBurn {
+                planet_natural_id: planet_id,
+                planet_name,
+                items: Vec::new(),
+            });
+            
+            // Add burn items from workforce needs
+            if let Some(needs) = workforce.needs {
+                for need in needs {
+                    if let (Some(ticker), Some(consumption)) = (need.material_ticker, need.units_per_interval) {
+                        // Check if we already have this material
+                        if let Some(existing) = base_burn.items.iter_mut().find(|i| i.material_ticker == ticker) {
+                            existing.daily_consumption += consumption;
+                            // Update days_until_shortage to the minimum
+                            if let Some(days) = need.days_until_shortage {
+                                existing.days_until_shortage = Some(
+                                    existing.days_until_shortage.map_or(days, |d| d.min(days))
+                                );
+                            }
+                        } else {
+                            base_burn.items.push(BurnItem {
+                                material_ticker: ticker,
+                                daily_consumption: consumption,
+                                days_until_shortage: need.days_until_shortage,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Sort items by days_until_shortage (most urgent first)
+        for burn in planet_burns.values_mut() {
+            burn.items.sort_by(|a, b| {
+                match (a.days_until_shortage, b.days_until_shortage) {
+                    (Some(a_days), Some(b_days)) => a_days.partial_cmp(&b_days).unwrap_or(std::cmp::Ordering::Equal),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.material_ticker.cmp(&b.material_ticker),
+                }
+            });
+        }
+        
+        user_data.base_burns = planet_burns.into_values().collect();
+        // Sort bases by planet name
+        user_data.base_burns.sort_by(|a, b| a.planet_name.cmp(&b.planet_name));
     }
     
     user_data

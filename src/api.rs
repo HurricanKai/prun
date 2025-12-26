@@ -1,4 +1,4 @@
-use crate::data::{AuthResponse, ExchangeStation, Flight, Ship, Site, StarSystem};
+use crate::data::{AuthResponse, ExchangeStation, Flight, Ship, Site, StarSystem, Workforce};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestInit, RequestMode, Response, Headers};
@@ -103,5 +103,10 @@ pub async fn fetch_sites(username: &str, auth_token: &str) -> Result<Vec<Site>, 
 
 pub async fn fetch_flights(username: &str, auth_token: &str) -> Result<Vec<Flight>, String> {
     let url = format!("{}/ship/flights/{}", FIO_API_BASE, username);
+    fetch_json(&url, Some(auth_token)).await
+}
+
+pub async fn fetch_workforce(username: &str, auth_token: &str) -> Result<Vec<Workforce>, String> {
+    let url = format!("{}/workforce/{}", FIO_API_BASE, username);
     fetch_json(&url, Some(auth_token)).await
 }

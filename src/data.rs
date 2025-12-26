@@ -144,6 +144,68 @@ pub struct AuthResponse {
     pub expiry: Option<String>,
 }
 
+// Workforce need (material consumption)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkforceNeed {
+    #[serde(rename = "MaterialId")]
+    pub material_id: Option<String>,
+    #[serde(rename = "MaterialName")]
+    pub material_name: Option<String>,
+    #[serde(rename = "MaterialTicker")]
+    pub material_ticker: Option<String>,
+    #[serde(rename = "MaterialCategory")]
+    pub material_category: Option<String>,
+    #[serde(rename = "Amount")]
+    pub amount: Option<f64>,
+    #[serde(rename = "UnitsPerInterval")]
+    pub units_per_interval: Option<f64>,
+    #[serde(rename = "DaysUntilShortage")]
+    pub days_until_shortage: Option<f64>,
+}
+
+// Workforce data for a planet
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Workforce {
+    #[serde(rename = "PlanetId")]
+    pub planet_id: Option<String>,
+    #[serde(rename = "PlanetNaturalId")]
+    pub planet_natural_id: Option<String>,
+    #[serde(rename = "PlanetName")]
+    pub planet_name: Option<String>,
+    #[serde(rename = "WorkforceType")]
+    pub workforce_type: Option<String>,
+    #[serde(rename = "Population")]
+    pub population: Option<i32>,
+    #[serde(rename = "Capacity")]
+    pub capacity: Option<i32>,
+    #[serde(rename = "Required")]
+    pub required: Option<i32>,
+    #[serde(rename = "Satisfaction")]
+    pub satisfaction: Option<f64>,
+    #[serde(rename = "Needs")]
+    pub needs: Option<Vec<WorkforceNeed>>,
+    #[serde(rename = "UserNameSubmitted")]
+    pub user_name_submitted: Option<String>,
+    #[serde(rename = "Timestamp")]
+    pub timestamp: Option<String>,
+}
+
+// Burn data for a material on a planet
+#[derive(Debug, Clone)]
+pub struct BurnItem {
+    pub material_ticker: String,
+    pub daily_consumption: f64,
+    pub days_until_shortage: Option<f64>,
+}
+
+// Aggregated burn data for a base/planet
+#[derive(Debug, Clone)]
+pub struct BaseBurn {
+    pub planet_natural_id: String,
+    pub planet_name: String,
+    pub items: Vec<BurnItem>,
+}
+
 // Flight line (part of origin/destination address)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FlightLine {
@@ -253,6 +315,7 @@ pub struct UserData {
     pub ship_system_ids: HashSet<String>,
     pub base_system_ids: HashSet<String>,
     pub flight_paths: Vec<FlightPath>,
+    pub base_burns: Vec<BaseBurn>, // Burn data per base
 }
 
 // System markers for visualization
