@@ -189,17 +189,6 @@ impl StarMapApp {
         }
     }
 
-    #[allow(dead_code)]
-    fn get_system_id_for_node(&self, node: &StarNode) -> Option<String> {
-        // The star map uses natural_id, but we need to find the system_id
-        // For now, we'll use the natural_id as a key since that's what we have
-        if self.star_map.is_some() {
-            Some(node.natural_id.clone())
-        } else {
-            None
-        }
-    }
-
     fn world_to_screen(&self, node: &StarNode, rect: egui::Rect) -> egui::Pos2 {
         let (x, y) = match self.view.projection {
             Projection::XY => (node.position[0], node.position[1]),
@@ -688,6 +677,55 @@ enum AppMessage {
     UserDataLoaded(Result<UserData, String>),
 }
 
+/// Fetch all user data (ships, flights, bases) from the API
+async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
+    let mut user_data = UserData {
+        username: username.to_string(),
+        ship_system_ids: HashSet::new(),
+        base_system_ids: HashSet::new(),
+        flight_paths: Vec::new(),
+    };
+    
+    // Fetch ships (docked only - ships in flight have empty location)
+    if let Ok(ships) = api::fetch_ships(username, auth_token).await {
+        for ship in ships {
+            if let Some(location) = ship.location {
+                if !location.is_empty() {
+                    user_data.ship_system_ids.insert(extract_system_from_planet(&location));
+                }
+            }
+        }
+    }
+    
+    // Fetch active flights
+    if let Ok(flights) = api::fetch_flights(username, auth_token).await {
+        for flight in flights {
+            if let (Some(origin), Some(dest)) = (
+                flight.origin_system_natural_id(),
+                flight.destination_system_natural_id(),
+            ) {
+                user_data.flight_paths.push(FlightPath {
+                    origin_system_id: origin.clone(),
+                    destination_system_id: dest.clone(),
+                    ship_registration: flight.ship_id,
+                    is_in_system: origin == dest,
+                });
+            }
+        }
+    }
+    
+    // Fetch bases/sites
+    if let Ok(sites) = api::fetch_sites(username, auth_token).await {
+        for site in sites {
+            if let Some(planet_id) = site.planet_identifier {
+                user_data.base_system_ids.insert(extract_system_from_planet(&planet_id));
+            }
+        }
+    }
+    
+    user_data
+}
+
 // Wrapper to handle async data loading
 struct AppWrapper {
     app: StarMapApp,
@@ -721,86 +759,9 @@ impl AppWrapper {
             app.username = username.clone();
             app.loading_user_data = true;
             
-            // Fetch user data with restored auth
             let tx_user = tx.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let mut user_data = UserData {
-                    username: username.clone(),
-                    ship_system_ids: HashSet::new(),
-                    base_system_ids: HashSet::new(),
-                    flight_paths: Vec::new(),
-                };
-                
-                // Fetch ships
-                match api::fetch_ships(&username, &auth_token).await {
-                    Ok(ships) => {
-                        tracing::info!("Fetched {} ships", ships.len());
-                        for ship in &ships {
-                            tracing::info!("Ship {} location: {:?}, flight_id: {:?}", 
-                                ship.registration, ship.location, ship.flight_id);
-                            if let Some(location) = &ship.location {
-                                // Skip empty locations (ships in flight)
-                                if location.is_empty() {
-                                    tracing::info!("  -> ship is in flight, skipping");
-                                    continue;
-                                }
-                                // Location might be a planet ID or system ID, extract system
-                                let system_id = extract_system_from_planet(location);
-                                tracing::info!("  -> system_id: {}", system_id);
-                                user_data.ship_system_ids.insert(system_id);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to fetch ships: {}", e);
-                    }
-                }
-                
-                // Fetch flights
-                match api::fetch_flights(&username, &auth_token).await {
-                    Ok(flights) => {
-                        tracing::info!("Fetched {} flights", flights.len());
-                        for flight in &flights {
-                            tracing::info!("Flight {:?}: origin={:?}, dest={:?}", 
-                                flight.flight_id, flight.origin, flight.destination);
-                            
-                            let origin_system = flight.origin_system_natural_id();
-                            let dest_system = flight.destination_system_natural_id();
-                            
-                            tracing::info!("  -> origin_system={:?}, dest_system={:?}", origin_system, dest_system);
-                            
-                            if let (Some(origin), Some(dest)) = (origin_system, dest_system) {
-                                let is_in_system = origin == dest;
-                                tracing::info!("  -> {} -> {} (in_system: {})", origin, dest, is_in_system);
-                                user_data.flight_paths.push(FlightPath {
-                                    origin_system_id: origin,
-                                    destination_system_id: dest,
-                                    ship_registration: flight.ship_id.clone(),
-                                    is_in_system,
-                                });
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to fetch flights: {}", e);
-                    }
-                }
-                
-                // Fetch sites (bases)
-                match api::fetch_sites(&username, &auth_token).await {
-                    Ok(sites) => {
-                        for site in sites {
-                            if let Some(planet_id) = site.planet_identifier {
-                                let system_id = extract_system_from_planet(&planet_id);
-                                user_data.base_system_ids.insert(system_id);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to fetch sites: {}", e);
-                    }
-                }
-                
+                let user_data = fetch_all_user_data(&username, &auth_token).await;
                 let _ = tx_user.send(AppMessage::UserDataLoaded(Ok(user_data)));
             });
         }
@@ -815,8 +776,7 @@ impl AppWrapper {
     fn handle_login(&self, username: String, password: String) {
         let tx = self.message_sender.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = api::login(&username, &password).await;
-            match result {
+            match api::login(&username, &password).await {
                 Ok(auth_response) => {
                     let _ = tx.send(AppMessage::LoginResult(Ok((auth_response.auth_token, username))));
                 }
@@ -830,87 +790,7 @@ impl AppWrapper {
     fn fetch_user_data(&self, username: String, auth_token: String) {
         let tx = self.message_sender.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let mut user_data = UserData {
-                username: username.clone(),
-                ship_system_ids: HashSet::new(),
-                base_system_ids: HashSet::new(),
-                flight_paths: Vec::new(),
-            };
-            
-            // Fetch ships
-            match api::fetch_ships(&username, &auth_token).await {
-                Ok(ships) => {
-                    tracing::info!("Fetched {} ships", ships.len());
-                    for ship in &ships {
-                        tracing::info!("Ship {} location: {:?}, flight_id: {:?}", 
-                            ship.registration, ship.location, ship.flight_id);
-                        if let Some(location) = &ship.location {
-                            // Skip empty locations (ships in flight)
-                            if location.is_empty() {
-                                tracing::info!("  -> ship is in flight, skipping");
-                                continue;
-                            }
-                            // Location might be a planet ID or system ID, extract system
-                            let system_id = extract_system_from_planet(location);
-                            tracing::info!("  -> system_id: {}", system_id);
-                            user_data.ship_system_ids.insert(system_id);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to fetch ships: {}", e);
-                }
-            }
-            
-            // Fetch flights
-            match api::fetch_flights(&username, &auth_token).await {
-                Ok(flights) => {
-                    tracing::info!("Fetched {} flights", flights.len());
-                    for flight in &flights {
-                        tracing::info!("Flight {:?}: origin={:?}, dest={:?}", 
-                            flight.flight_id, flight.origin, flight.destination);
-                        
-                        let origin_system = flight.origin_system_natural_id();
-                        let dest_system = flight.destination_system_natural_id();
-                        
-                        tracing::info!("  -> origin_system={:?}, dest_system={:?}", origin_system, dest_system);
-                        
-                        if let (Some(origin), Some(dest)) = (origin_system, dest_system) {
-                            let is_in_system = origin == dest;
-                            tracing::info!("  -> {} -> {} (in_system: {})", origin, dest, is_in_system);
-                            user_data.flight_paths.push(FlightPath {
-                                origin_system_id: origin,
-                                destination_system_id: dest,
-                                ship_registration: flight.ship_id.clone(),
-                                is_in_system,
-                            });
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to fetch flights: {}", e);
-                }
-            }
-            
-            // Fetch sites (bases)
-            match api::fetch_sites(&username, &auth_token).await {
-                Ok(sites) => {
-                    tracing::info!("Fetched {} sites", sites.len());
-                    for site in &sites {
-                        tracing::info!("Site planet_identifier: {:?}", site.planet_identifier);
-                        if let Some(planet_id) = &site.planet_identifier {
-                            // Extract system ID from planet identifier (e.g., "UV-351a" -> "UV-351")
-                            let system_id = extract_system_from_planet(planet_id);
-                            tracing::info!("  -> system_id: {}", system_id);
-                            user_data.base_system_ids.insert(system_id);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to fetch sites: {}", e);
-                }
-            }
-            
+            let user_data = fetch_all_user_data(&username, &auth_token).await;
             let _ = tx.send(AppMessage::UserDataLoaded(Ok(user_data)));
         });
     }
