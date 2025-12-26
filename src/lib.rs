@@ -761,7 +761,7 @@ impl AppWrapper {
                     Ok(flights) => {
                         tracing::info!("Fetched {} flights", flights.len());
                         for flight in &flights {
-                            tracing::info!("Flight {}: origin={:?}, dest={:?}", 
+                            tracing::info!("Flight {:?}: origin={:?}, dest={:?}", 
                                 flight.flight_id, flight.origin, flight.destination);
                             
                             let origin_system = flight.origin_system_natural_id();
@@ -867,7 +867,7 @@ impl AppWrapper {
                 Ok(flights) => {
                     tracing::info!("Fetched {} flights", flights.len());
                     for flight in &flights {
-                        tracing::info!("Flight {}: origin={:?}, dest={:?}", 
+                        tracing::info!("Flight {:?}: origin={:?}, dest={:?}", 
                             flight.flight_id, flight.origin, flight.destination);
                         
                         let origin_system = flight.origin_system_natural_id();

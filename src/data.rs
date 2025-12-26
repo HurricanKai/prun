@@ -145,51 +145,51 @@ pub struct AuthResponse {
 }
 
 // Flight line (part of origin/destination address)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FlightLine {
-    #[serde(rename = "Type")]
-    pub line_type: String,
-    #[serde(rename = "LineId")]
+    #[serde(rename = "Type", default)]
+    pub line_type: Option<String>,
+    #[serde(rename = "LineId", default)]
     pub line_id: Option<String>,
-    #[serde(rename = "LineNaturalId")]
+    #[serde(rename = "LineNaturalId", default)]
     pub line_natural_id: Option<String>,
-    #[serde(rename = "LineName")]
+    #[serde(rename = "LineName", default)]
     pub line_name: Option<String>,
 }
 
 // Flight segment data
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FlightSegment {
-    #[serde(rename = "Type")]
-    pub segment_type: String,
-    #[serde(rename = "Origin")]
+    #[serde(rename = "Type", default)]
+    pub segment_type: Option<String>,
+    #[serde(rename = "Origin", default)]
     pub origin: Option<String>,
-    #[serde(rename = "Destination")]
+    #[serde(rename = "Destination", default)]
     pub destination: Option<String>,
-    #[serde(rename = "OriginLines")]
+    #[serde(rename = "OriginLines", default)]
     pub origin_lines: Option<Vec<FlightLine>>,
-    #[serde(rename = "DestinationLines")]
+    #[serde(rename = "DestinationLines", default)]
     pub destination_lines: Option<Vec<FlightLine>>,
 }
 
 // Flight data from /ship/flights/{username}
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Flight {
-    #[serde(rename = "FlightId")]
-    pub flight_id: String,
-    #[serde(rename = "ShipId")]
-    pub ship_id: String,
-    #[serde(rename = "Origin")]
+    #[serde(rename = "FlightId", default)]
+    pub flight_id: Option<String>,
+    #[serde(rename = "ShipId", default)]
+    pub ship_id: Option<String>,
+    #[serde(rename = "Origin", default)]
     pub origin: Option<String>,
-    #[serde(rename = "Destination")]
+    #[serde(rename = "Destination", default)]
     pub destination: Option<String>,
-    #[serde(rename = "Segments")]
+    #[serde(rename = "Segments", default)]
     pub segments: Option<Vec<FlightSegment>>,
-    #[serde(rename = "DepartureTimeEpochMs")]
+    #[serde(rename = "DepartureTimeEpochMs", default)]
     pub departure_time_epoch_ms: Option<i64>,
-    #[serde(rename = "ArrivalTimeEpochMs")]
+    #[serde(rename = "ArrivalTimeEpochMs", default)]
     pub arrival_time_epoch_ms: Option<i64>,
-    #[serde(rename = "CurrentSegmentIndex")]
+    #[serde(rename = "CurrentSegmentIndex", default)]
     pub current_segment_index: Option<i32>,
 }
 
@@ -199,7 +199,7 @@ impl Flight {
         self.segments.as_ref()?.first()?
             .origin_lines.as_ref()?
             .iter()
-            .find(|line| line.line_type == "system")
+            .find(|line| line.line_type.as_deref() == Some("system"))
             .and_then(|line| line.line_natural_id.clone())
     }
     
@@ -208,7 +208,7 @@ impl Flight {
         self.segments.as_ref()?.last()?
             .destination_lines.as_ref()?
             .iter()
-            .find(|line| line.line_type == "system")
+            .find(|line| line.line_type.as_deref() == Some("system"))
             .and_then(|line| line.line_natural_id.clone())
     }
 }
@@ -218,7 +218,8 @@ impl Flight {
 pub struct FlightPath {
     pub origin_system_id: String,
     pub destination_system_id: String,
-    pub ship_registration: String,
+    #[allow(dead_code)]
+    pub ship_registration: Option<String>,
     pub is_in_system: bool, // true if origin == destination (in-system flight)
 }
 
