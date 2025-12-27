@@ -808,8 +808,6 @@ async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
                 rates: Vec::new(),
             });
             
-            // Get efficiency for this production line (accounts for building condition + worker satisfaction)
-            let efficiency = line.efficiency.unwrap_or(1.0);
             let capacity = line.capacity.unwrap_or(0) as usize;
             
             // Process each order in this production line
@@ -822,6 +820,7 @@ async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
                     .collect();
                 
                 // Calculate total queue duration
+                // Note: DurationMs already accounts for efficiency, so we don't multiply by it
                 let total_queue_duration_ms: f64 = queued_orders.iter()
                     .map(|o| o.duration_ms.unwrap_or(0) as f64)
                     .sum();
@@ -832,8 +831,9 @@ async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
                 
                 // For each queued order, calculate its contribution to daily rates
                 // The queue cycles through all orders, so each order's contribution is:
-                // (materials per order) / (total_queue_duration) * MS_PER_DAY * capacity * efficiency
-                let rate_multiplier = (MS_PER_DAY / total_queue_duration_ms) * (capacity as f64) * efficiency;
+                // (materials per order) / (total_queue_duration) * MS_PER_DAY * capacity
+                // DurationMs is already efficiency-adjusted, so we don't multiply by efficiency again
+                let rate_multiplier = (MS_PER_DAY / total_queue_duration_ms) * (capacity as f64);
                 
                 for order in queued_orders {
                     // Process inputs (consumption)
