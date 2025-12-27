@@ -172,6 +172,8 @@ pub struct ProductionOrder {
     pub is_halted: Option<bool>,
     #[serde(rename = "StandardRecipeName")]
     pub standard_recipe_name: Option<String>,
+    #[serde(rename = "StartedEpochMs")]
+    pub started_epoch_ms: Option<i64>,
 }
 
 // Production line from /production/{UserName}

@@ -69,6 +69,9 @@ pub struct StarMapApp {
     show_cx: bool,
     show_bases: bool,
     show_ships: bool,
+    
+    // Production window state - which planets' production windows are open (by planet_natural_id)
+    production_windows_open: HashSet<String>,
 }
 
 struct MapView {
@@ -123,6 +126,8 @@ impl Default for StarMapApp {
             show_cx: true,
             show_bases: true,
             show_ships: true,
+            
+            production_windows_open: HashSet::new(),
         }
     }
 }
@@ -541,7 +546,7 @@ impl StarMapApp {
                     }
                 }
                 
-                // Show production data for bases in this system
+                // Show production buttons for bases in this system
                 if let Some(user_data) = &self.user_data {
                     let system_id = &node.natural_id;
                     let bases_in_system: Vec<_> = user_data.base_production.iter()
@@ -552,53 +557,10 @@ impl StarMapApp {
                         ui.separator();
                         ui.heading("📊 Production Rates");
                         
-                        for base in bases_in_system {
-                            ui.collapsing(format!("🏭 {}", base.planet_name), |ui| {
-                                if base.rates.is_empty() {
-                                    ui.label("No production data");
-                                } else {
-                                    egui::Grid::new(format!("prod_grid_{}", base.planet_natural_id))
-                                        .striped(true)
-                                        .show(ui, |ui| {
-                                            ui.label("Material");
-                                            ui.label("In/day");
-                                            ui.label("Out/day");
-                                            ui.label("Net/day");
-                                            ui.end_row();
-                                            
-                                            for rate in &base.rates {
-                                                ui.label(&rate.material_ticker);
-                                                
-                                                // Input (consumption) in red
-                                                if rate.daily_input > 0.0 {
-                                                    ui.colored_label(egui::Color32::from_rgb(255, 100, 100), format!("-{:.1}", rate.daily_input));
-                                                } else {
-                                                    ui.label("-");
-                                                }
-                                                
-                                                // Output (production) in green
-                                                if rate.daily_output > 0.0 {
-                                                    ui.colored_label(egui::Color32::from_rgb(100, 255, 100), format!("+{:.1}", rate.daily_output));
-                                                } else {
-                                                    ui.label("-");
-                                                }
-                                                
-                                                // Net rate
-                                                let net = rate.daily_output - rate.daily_input;
-                                                let color = if net > 0.0 {
-                                                    egui::Color32::from_rgb(100, 255, 100)
-                                                } else if net < 0.0 {
-                                                    egui::Color32::from_rgb(255, 100, 100)
-                                                } else {
-                                                    egui::Color32::GRAY
-                                                };
-                                                let sign = if net > 0.0 { "+" } else { "" };
-                                                ui.colored_label(color, format!("{}{:.1}", sign, net));
-                                                ui.end_row();
-                                            }
-                                        });
-                                }
-                            });
+                        for base in &bases_in_system {
+                            if ui.button(format!("🏭 {}", base.planet_name)).clicked() {
+                                self.production_windows_open.insert(base.planet_natural_id.clone());
+                            }
                         }
                     }
                 }
@@ -671,6 +633,90 @@ impl StarMapApp {
             }
         }
     }
+    
+    fn draw_production_window(&mut self, ctx: &egui::Context) {
+        if self.production_windows_open.is_empty() {
+            return;
+        }
+        
+        // Clone the set of open windows to avoid borrow issues
+        let open_planets: Vec<String> = self.production_windows_open.iter().cloned().collect();
+        let mut to_close: Vec<String> = Vec::new();
+        
+        for planet_id in open_planets {
+            // Find the production data for this planet
+            let base_production = self.user_data.as_ref().and_then(|ud| {
+                ud.base_production.iter().find(|b| b.planet_natural_id == planet_id).cloned()
+            });
+            
+            let Some(base) = base_production else {
+                to_close.push(planet_id);
+                continue;
+            };
+            
+            let mut open = true;
+            egui::Window::new(format!("🏭 {} Production", base.planet_name))
+                .id(egui::Id::new(format!("prod_window_{}", planet_id)))
+                .open(&mut open)
+                .resizable(true)
+                .default_width(350.0)
+                .show(ctx, |ui| {
+                    if base.rates.is_empty() {
+                        ui.label("No production data");
+                    } else {
+                        egui::Grid::new(format!("prod_window_grid_{}", base.planet_natural_id))
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.label("Material");
+                                ui.label("In/day");
+                                ui.label("Out/day");
+                                ui.label("Net/day");
+                                ui.end_row();
+                                
+                                for rate in &base.rates {
+                                    ui.label(&rate.material_ticker);
+                                    
+                                    // Input (consumption) in red
+                                    if rate.daily_input > 0.0 {
+                                        ui.colored_label(egui::Color32::from_rgb(255, 100, 100), format!("-{:.1}", rate.daily_input));
+                                    } else {
+                                        ui.label("-");
+                                    }
+                                    
+                                    // Output (production) in green
+                                    if rate.daily_output > 0.0 {
+                                        ui.colored_label(egui::Color32::from_rgb(100, 255, 100), format!("+{:.1}", rate.daily_output));
+                                    } else {
+                                        ui.label("-");
+                                    }
+                                    
+                                    // Net rate
+                                    let net = rate.daily_output - rate.daily_input;
+                                    let color = if net > 0.0 {
+                                        egui::Color32::from_rgb(100, 255, 100)
+                                    } else if net < 0.0 {
+                                        egui::Color32::from_rgb(255, 100, 100)
+                                    } else {
+                                        egui::Color32::GRAY
+                                    };
+                                    let sign = if net > 0.0 { "+" } else { "" };
+                                    ui.colored_label(color, format!("{}{:.1}", sign, net));
+                                    ui.end_row();
+                                }
+                            });
+                    }
+                });
+            
+            if !open {
+                to_close.push(planet_id);
+            }
+        }
+        
+        // Remove closed windows
+        for planet_id in to_close {
+            self.production_windows_open.remove(&planet_id);
+        }
+    }
 }
 
 impl eframe::App for StarMapApp {
@@ -689,6 +735,9 @@ impl eframe::App for StarMapApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.draw_map(ui);
         });
+
+        // Production window (pop-out)
+        self.draw_production_window(ctx);
 
         // Request repaint for smooth interaction
         if self.hovered_star.is_some() || self.loading || self.logging_in || self.loading_user_data {
@@ -811,12 +860,13 @@ async fn fetch_all_user_data(username: &str, auth_token: &str) -> UserData {
             let capacity = line.capacity.unwrap_or(0) as usize;
             
             // Process each order in this production line
-            // Skip the first `capacity` orders (those are active), only use queued orders
+            // Queued orders have no StartedEpochMs (only active/running orders have it)
             if let Some(orders) = line.orders {
-                // Get queued recurring orders only
+                // Get queued recurring orders only (no StartedEpochMs means not yet started)
                 let queued_orders: Vec<_> = orders.into_iter()
-                    .skip(capacity)
-                    .filter(|o| o.recurring.unwrap_or(false) && !o.is_halted.unwrap_or(false))
+                    .filter(|o| o.started_epoch_ms.is_none() 
+                        && o.recurring.unwrap_or(false) 
+                        && !o.is_halted.unwrap_or(false))
                     .collect();
                 
                 // Calculate total queue duration
